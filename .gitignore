@@ -1,0 +1,7 @@
+node_modules/
+.env
+data/
+demo-data/
+*.tmp
+.DS_Store
+~$*

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bus Logbook Login</title>
+  <style>
+    :root { color-scheme: light; --bg:#f3f6fb; --card:#fff; --ink:#1f2937; --muted:#5c6678; --accent:#1f7a8c; --line:#dfe7f2; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:linear-gradient(180deg, #eef5fb 0%, #f9fafb 100%); color:var(--ink); min-height:100vh; display:grid; place-items:center; }
+    .card { width:min(420px, 92vw); background:var(--card); border:1px solid var(--line); border-radius:18px; box-shadow:0 14px 30px rgba(15,23,42,.08); padding:28px 24px; }
+    h1 { margin:0 0 8px; font-size:2rem; }
+    p { color:var(--muted); margin:0 0 20px; }
+    label { display:block; font-size:.92rem; color:var(--muted); margin-bottom:8px; }
+    input { width:100%; border:1px solid var(--line); border-radius:10px; padding:12px 14px; font-size:1rem; margin-bottom:16px; }
+    button { width:100%; border:none; border-radius:10px; padding:12px 16px; background:var(--accent); color:#fff; font-weight:600; cursor:pointer; }
+    .error { background:#fff1f2; border:1px solid #fecdd3; color:#9f1239; padding:10px 12px; border-radius:10px; margin-bottom:12px; display:none; }
+    .error.show { display:block; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Bus Logbook</h1>
+    <p>School admin login</p>
+    <div id="error" class="error"></div>
+    <form id="loginForm">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" required placeholder="admin@school.org">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" required placeholder="Enter password">
+      <button type="submit">Log in</button>
+    </form>
+    <div style="margin-top: 16px; text-align: center;">
+      <button id="googleLogin" type="button" style="background:#fff;border:1px solid var(--line);color:var(--ink);">Continue with Google</button>
+    </div>
+  </div>
+  <script src="/login.js"></script>
+</body>
+</html>
