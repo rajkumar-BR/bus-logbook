@@ -1,162 +1,192 @@
 # Bus Logbook
 
-A small app for the school transport office. It records every service, repair and part change for the school's buses, and shows:
+Bus Logbook is a small school transport operations tool for tracking bus maintenance, servicing, costs, repeat repairs, and uploaded documents. The app stores records in an Excel workbook and related folders, and it now includes a login screen plus optional Google sign-in for the school admin.
 
-- **Fleet today:** status, next service due, and how much each bus has cost since its last service
-- **Bus history:** a timeline of every visit with what changed, why, the bill, and spending between services
-- **Repeat repairs:** which buses keep coming back for the same fault, and likely reasons
-- **Enter a bill:** the office uploads the driver's bill, optionally lets AI read it, checks the details and saves
+## What it does
 
-For now everything is stored **on this computer**, in one Excel workbook plus folders for bills and photos. The folder layout matches the planned Google Drive layout, so it can be moved there later (see the last section).
+- Keeps a fleet overview with service status and recent cost history
+- Tracks every service entry, repair and part change on each bus
+- Shows repeat-fault warnings for recurring issues
+- Stores supporting files such as bills, photos and bus documents
+- Lets staff review and correct prior entries without deleting history
+- Optionally reads bill details with Claude AI before saving
+- Supports local Excel storage and a Google Drive-based deployment mode
 
-## 1. One-time setup
+## Recent changes
 
-You need **Node.js 22 or newer** (check with `node --version`).
+The app has been updated to include:
+
+- School admin login with `ADMIN_EMAIL` and `ADMIN_PASSWORD`
+- Optional Google OAuth login for the school Google account
+- A real login page at `/login.html` before any app data is accessible
+- Google Drive integration via `STORAGE=google` and `GOOGLE_DRIVE_FOLDER_NAME`
+- Demo data support via `npm run demo` without touching the real workbook
+- A safer local setup for single-school deployment and future multi-school extension
+
+## Requirements
+
+- Node.js 22 or newer
+- A writable local folder for the Excel workbook and uploaded files
+
+## Setup
+
+From the project root:
 
 ```bash
-cd bus-logbook
 npm install
-cp .env.example .env      # Windows: copy .env.example .env
-                          # then edit .env if you want AI bill reading
+cp .env.example .env
 ```
 
-## 2. Try it with sample data
+Edit `.env` and set the values you need:
 
-```bash
-npm run demo
+```env
+DATA_DIR=./data
+STORAGE=local
+PORT=3000
+ADMIN_EMAIL=admin@school.local
+ADMIN_PASSWORD=change-this-password
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+GOOGLE_REDIRECT_URI=http://localhost:3000/auth/google/callback
+GOOGLE_DRIVE_FOLDER_NAME=Transportation
+ANTHROPIC_API_KEY=
 ```
 
-Open http://localhost:3000. This loads the 10 sample buses from the mockup into a separate `demo-data/` folder. Your real data is never touched, and running the command again resets the demo.
+Notes:
 
-## 3. Use it for real
+- `ADMIN_EMAIL` and `ADMIN_PASSWORD` are used for the local admin login.
+- If you want Google sign-in, set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
+- If you want AI bill reading, add your Anthropic API key.
+- Leave `ANTHROPIC_API_KEY` blank to disable AI reading.
+
+## Run locally
+
+Start the app:
 
 ```bash
 npm start
 ```
 
-Open http://localhost:3000, go to **Buses** and add your buses, then use **Enter a bill** for each bill the drivers hand in. Keep the terminal window open while you use the app; press `Ctrl+C` to stop it.
+Open:
 
-To enter older records in bulk, paste them into the `Entries` and `Parts changed` tabs of the workbook (with the app stopped), keeping the same columns.
-
-## Multi-school-ready architecture
-
-This app is already structured so it can be extended to multiple schools later without replacing the whole application:
-
-- `src/schema.js` is the single source of truth for workbook tabs and columns.
-- `src/service.js` holds business logic and is the place to add tenant scoping.
-- `src/storage/index.js` isolates the storage backend so a future Google Sheets or database adapter can replace the local Excel workbook.
-- `src/logic.js` now includes `recordsForSchool()` as a reusable helper for filtering by `school_id` while preserving legacy data rows without a school tag.
-
-Recommended future layout:
-
-```
-/data/
-├── schools/
-│   ├── school-001/
-│   │   ├── Bus Logbook Data.xlsx
-│   │   ├── Bills/
-│   │   ├── Photos/
-│   │   └── Bus documents/
-│   └── school-002/
-│       ├── Bus Logbook Data.xlsx
-│       ├── Bills/
-│       ├── Photos/
-│       └── Bus documents/
-└── global/
-    └── schools.xlsx
+```text
+http://localhost:3000
 ```
 
-Migration path for a multi-school release:
+The app redirects unauthenticated users to `/login.html`. Sign in with the school admin account or use the Google sign-in button when configured.
 
-1. Add a `Schools` table and a `school_id` column to all school-scoped tables.
-2. Scope every read/write by `school_id` in the service layer.
-3. Add user roles and school access checks before saving any record.
-4. Keep the current single-school app working by treating a blank `school_id` as "legacy/default school".
+## Demo data
 
-## Cloud deployment
+To load the built-in sample data without touching your real workbook:
 
-This app is a Node + Express service with local file storage, so the best cloud hosts are those that provide a persistent volume or disk. Free or low-cost options can work for trials, but not all are suitable for long-term production use.
+```bash
+npm run demo
+```
 
-### Good options
+This seeds `demo-data/` and runs the app in demo mode. The sample data is reset each time you run the command.
+
+## Data layout
+
+By default, the app stores data in the `data/` directory:
+
+```text
+data/
+├── Bus Logbook Data.xlsx
+├── Bills/
+├── Photos/
+├── Bus documents/
+├── Excel exports/
+├── .backups/
+└── ...
+```
+
+The workbook has tabs such as:
+
+- Schools
+- Buses
+- Routes
+- Route assignments
+- Entries
+- Parts changed
+- Bus documents
+- Workshops
+- Lists
+- Settings
+- Change log
+- AI summaries
+
+The app expects the workbook to be closed in Excel before entering records in the web app, or the files may overwrite each other.
+
+## Cloud and Google Drive deployment
+
+This app is a Node + Express service and is designed for a persistent server environment, not a purely static host.
+
+For Google Drive deployment:
+
+```env
+STORAGE=google
+GOOGLE_DRIVE_FOLDER_ID=your_shared_folder_id
+GOOGLE_DRIVE_FOLDER_NAME=Transportation
+GOOGLE_SERVICE_ACCOUNT_JSON=
+```
+
+This mode targets a shared Google Drive folder and keeps the workbook and uploaded files in that folder instead of the local `data/` directory.
+
+Good deployment options include:
 
 - Render
 - Railway
 - Fly.io
 
-These are better than purely static hosts because the app writes Excel files and stores uploaded PDFs/photos locally.
+Use a host that keeps a persistent volume or drive-backed storage; the app writes Excel files and uploaded files on disk.
 
-### What to set up in production
+## AI bill reading
 
-- `HOST=0.0.0.0`
-- `PORT=3000`
-- a persistent volume for `/data` or a configured `DATA_DIR`
-- `npm start` as the start command
+To enable AI-assisted bill entry:
 
-### AppDeploy.ai and free deployment
+1. Get an API key from https://console.anthropic.com
+2. Put it in `.env` as `ANTHROPIC_API_KEY=...`
+3. Restart the app
 
-AppDeploy.ai can work for a demo or quick test if it supports a Node app with persistent storage, but for this project it is not the best free default. The app is not a simple frontend-only static site; it has:
+Then on the entry form, upload a bill and click `Read bill with AI`. The fields it fills are highlighted for review before saving. Nothing is saved until you click Save.
 
-- a web server
-- uploaded file handling
-- Excel workbook writes
-- local file storage
+## Multi-school-ready design
 
-That means a free plan without persistent storage is usually not reliable for real use. For a real deployment, prefer Render or Railway.
+The code is structured so it can grow beyond a single school later without replacing the whole app:
 
-## Where the data is
+- `src/schema.js` is the source of truth for workbook tabs and columns
+- `src/service.js` contains business logic and app operations
+- `src/storage/index.js` isolates the storage backend
+- `src/logic.js` contains reusable filtering helpers such as `recordsForSchool()`
 
-```
-data/
-├── Bus Logbook Data.xlsx     ← all records, one tab per table
-├── Bills/Bus 04/2026-10-18 Sri Murugan Motors 2231.jpg
-├── Photos/Bus 04/…
-├── Bus documents/
-├── Excel exports/
-└── .backups/                 ← a copy of the workbook before every save (last 30 kept)
-```
+The future path is to add a `school_id` model and scope reads/writes by school while keeping current single-school data working with legacy rows.
 
-Workbook tabs: Schools, Buses, Routes, Route assignments, Entries, Parts changed, Bus documents, Workshops, Lists, Settings, Change log, AI summaries. The columns match the architecture document.
+## Developer notes
 
-**Rules that keep the history trustworthy**
+Key files:
 
-- Entries are never deleted or overwritten. **Correct this entry** (on a bus's history) saves a corrected copy, marks the old one "Corrected" and writes what changed to the Change log.
-- You can open the workbook in Excel to read it or to edit setup tabs (Buses, Routes, Route assignments, Workshops, Lists, Settings, Bus documents). **Close it in Excel before entering bills in the app**, or one may overwrite the other.
-- Back up the `data/` folder (e.g. copy it to a USB drive or the school Drive) regularly until the Google Drive move.
-
-## AI bill reading (optional)
-
-1. Create an API key at https://console.anthropic.com and add a small prepaid credit.
-2. Put it in `.env` as `ANTHROPIC_API_KEY=...` and restart the app.
-
-On the entry form, upload a bill and click **Read bill with AI**. The fields it fills are highlighted; check them before saving. Nothing is saved until you click Save. Expect roughly ₹3 per bill. To turn it off without removing the key, set `ai_enabled` to `FALSE` in the Settings tab.
-
-## Settings tab
-
-| key | meaning |
-|---|---|
-| default_service_km / default_service_days | service interval unless set per bus (10,000 km / 90 days) |
-| repeat_window_days | how far back the repeat-repair warning looks (180) |
-| ai_enabled | TRUE / FALSE |
-
-## For developers
-
-```
-server.js                  HTTP routes (Express), uploads, error messages
-src/schema.js              tabs and columns (single source of truth)
-src/logic.js               rules: cost periods, service due, repeats, findings (no Node APIs)
-src/service.js             app operations: fleet, bus history, save/correct entry, add bus
-src/ai.js                  bill reading with Claude (structured output)
-src/storage/local-xlsx.js  storage adapter: Excel workbook + folders
-src/storage/index.js       picks the adapter from STORAGE
-public/                    the screens (plain HTML/CSS/JS, no build step)
-scripts/seed-demo.js       sample data
-test/                      npm test
+```text
+server.js                  HTTP routes, auth, uploads, Excel storage
+src/schema.js             workbook schema and columns
+src/logic.js              rules for fleet, costs, service due, repeat repairs
+src/service.js            app operations and business workflows
+src/ai.js                 AI bill reading integration
+src/storage/index.js      storage adapter selection
+src/storage/local-xlsx.js  local Excel workbook storage
+public/                   web UI and login flow
+scripts/seed-demo.js      demo data generator
+test/                     automated tests
 ```
 
-### Moving to Google Drive later
+Run tests with:
 
-All reads and writes go through the storage adapter (`init`, `read`, `transact`, `saveFile`, `fileUrl`). The plan:
+```bash
+npm test
+```
 
-1. Import `Bus Logbook Data.xlsx` into Google Sheets (File → Import). The tabs and columns carry over unchanged.
-2. Upload the `Bills/`, `Photos/` and `Bus documents/` folders to the Shared drive.
-3. Either add a `google` adapter here (Sheets API + Drive API) and set `STORAGE=google`, or move the app into Apps Script as in the architecture document. `src/logic.js` and the screens in `public/` are plain JavaScript and carry over as they are.
+## Important rules
+
+- Entries are never deleted or overwritten. Correction creates a new corrected record and logs the change.
+- Keep the workbook closed in Excel while the app is writing to it.
+- Back up `data/` regularly, especially before making major changes.
+- Never commit secrets such as API keys or passwords into the repository.
