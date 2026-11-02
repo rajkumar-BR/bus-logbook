@@ -318,3 +318,23 @@ test('removing an entry and editing a bus work in Postgres, and only within the 
     assert.equal((await storage.forSchool(b).read('Route assignments')).length, 0);
   } finally { await storage.drop(); }
 });
+
+test('the change log shows an organisation only its own events', opts, async () => {
+  const { storage, accounts } = await setup();
+  try {
+    const a = await accounts.createSchool({ name: 'School A' });
+    const b = await accounts.createSchool({ name: 'School B' });
+    const sa = createService(storage.forSchool(a), { today: () => '2026-11-03', user: 'a@a.test' });
+    const sb = createService(storage.forSchool(b), { today: () => '2026-11-03', user: 'b@b.test' });
+    await sa.addBus({ bus_no: '04' });
+    await sa.updateBus('04', { driver_name: 'Kumar' });
+    await sb.addBus({ bus_no: '09' });
+
+    const logA = await sa.getChangeLog();
+    const logB = await sb.getChangeLog();
+    assert.deepEqual(logA.events.map((e) => e.record_id).sort(), ['04', '04']);
+    assert.deepEqual(logB.events.map((e) => e.record_id), ['09']);
+    assert.ok(logA.events.every((e) => e.user === 'a@a.test'));
+    assert.equal((await sb.getChangeLog({ q: 'kumar' })).total, 0);
+  } finally { await storage.drop(); }
+});

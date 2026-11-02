@@ -304,3 +304,12 @@ dialog.ask .error{margin-bottom:10px}
 details.removed{padding:12px 16px;border-top:1px solid var(--line)}
 details.removed summary{cursor:pointer;font-weight:600}
 details.removed ul{margin:8px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:8px}
+
+/* change log */
+ol.logs{list-style:none;margin:0;padding:0}
+.logrow{display:grid;grid-template-columns:130px 1fr auto;gap:14px;padding:12px 16px;border-top:1px solid var(--line);align-items:start}
+.logrow:first-child{border-top:0}
+.logtitle{font-weight:600}
+.logdetail{list-style:none;margin:4px 0 0;padding:0;display:flex;flex-direction:column;gap:2px;font-size:14px}
+.logwhen,.logwho{font-size:12px;white-space:nowrap}
+@media (max-width:640px){.logrow{grid-template-columns:1fr}.logwho,.logwhen{white-space:normal}}

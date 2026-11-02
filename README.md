@@ -256,6 +256,7 @@ npm test
 
 - Entries are never deleted or overwritten. **Correct this entry** saves a corrected copy, marks the old one "Corrected" and logs what changed.
 - **Remove entry** is for an entry that should not exist (wrong bus, entered twice). It asks for a reason, stops the entry counting in costs and repeat checks, and keeps it on the bus page under "Removed entries" with who removed it, when and why. It also goes in the change log.
+- **Change log** (in the menu) lists everything that was added, corrected, edited, removed or imported, newest first, with who did it and, for edits, the old and new value. A correction that touches several fields shows as one event. Filter by kind of change or search for a bus, entry, name or word. Each organisation sees only its own.
 - **Edit bus** (on a bus's page) changes the driver, registration, make, year, seats, service interval and route, and retires or brings back a bus. The bus number never changes. A new route starts today and the old one ends yesterday, so past visits keep the route they had. Every change is written to the change log.
 - Keep the workbook closed in Excel while the app is writing to it.
 - Back up `data/` regularly, especially before making major changes.

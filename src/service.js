@@ -632,6 +632,32 @@ export function createService(storage, { readBill = null, today = localToday, us
     });
   }
 
+  // The change log, newest first. Rows written together (one correction touching several fields) are shown as one event.
+  const CHANGELOG_PAGE = 50;
+
+  async function getChangeLog({ action = '', q = '', page = 1 } = {}) {
+    const rows = (await storage.read('Change log')).map((r, i) => ({ ...r, _i: i })).filter((r) => r.timestamp);
+    rows.sort((a, b) => (a.timestamp < b.timestamp ? 1 : a.timestamp > b.timestamp ? -1 : b._i - a._i));
+
+    const groups = new Map();
+    for (const r of rows) {
+      const key = [r.timestamp, r.user, r.action, r.tab, r.record_id].join('\u0001');
+      if (!groups.has(key)) groups.set(key, { timestamp: r.timestamp, user: r.user, action: r.action, tab: r.tab, record_id: r.record_id, changes: [] });
+      groups.get(key).changes.push({ field: r.field, old_value: r.old_value, new_value: r.new_value });
+    }
+    const events = [...groups.values()].map((e) => ({ ...e, changes: e.changes.reverse() })); // back to the order they were written
+
+    const actions = [...new Set(events.map((e) => e.action).filter(Boolean))].sort();
+    const needle = String(q || '').trim().toLowerCase().slice(0, 100);
+    const wanted = String(action || '').toLowerCase();
+    const shown = events.filter((e) => (!wanted || String(e.action).toLowerCase() === wanted)
+      && (!needle || [e.user, e.action, e.tab, e.record_id, ...e.changes.flatMap((c) => [c.field, c.old_value, c.new_value])].some((v) => String(v ?? '').toLowerCase().includes(needle))));
+
+    const pages = Math.max(1, Math.ceil(shown.length / CHANGELOG_PAGE));
+    const current = Math.min(Math.max(1, Math.floor(Number(page)) || 1), pages);
+    return { total: shown.length, page: current, pages, pageSize: CHANGELOG_PAGE, actions, events: shown.slice((current - 1) * CHANGELOG_PAGE, current * CHANGELOG_PAGE) };
+  }
+
   // ---------- import from Excel
 
   const IMPORT_READS = ['Buses', 'Entries', 'Parts changed', 'Bus documents', 'Workshops', 'Route assignments', 'Lists'];
@@ -672,5 +698,5 @@ export function createService(storage, { readBill = null, today = localToday, us
     return I.buildTemplate({ kinds: lists.entry_kinds, systems: lists.systems });
   }
 
-  return { getLists, getFleet, getBus, getEntry, getRepeats, getDailyReport, saveDailyReport, checkRepeat, readBillFields, saveEntry, voidEntry, addBus, updateBus, listBuses, importWorkbook, importTemplate };
+  return { getLists, getFleet, getBus, getEntry, getRepeats, getDailyReport, saveDailyReport, checkRepeat, readBillFields, saveEntry, voidEntry, addBus, updateBus, listBuses, getChangeLog, importWorkbook, importTemplate };
 }

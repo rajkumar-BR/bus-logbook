@@ -191,3 +191,61 @@ test('clearing the route ends it, and leaving the route as it is changes nothing
   assert.equal(storage.tables['Route assignments'][0].to_date, '2026-11-02');
   assert.equal((await service.getBus('04')).bus.route, '');
 });
+
+// ---------- the change log
+
+test('the change log lists events newest first, with a correction\'s fields grouped into one event', async () => {
+  const { service, setToday } = setup({ Buses: [bus('04')] });
+  setToday('2026-11-03');
+  await service.updateBus('04', { driver_name: 'Kumar', year: 2019, seats: 42 }); // three rows, one event
+  const visit1 = await service.saveEntry(visit());
+  await service.voidEntry(visit1.entry_id, 'Entered twice by mistake');
+
+  const log = await service.getChangeLog();
+  const summary = log.events.map((e) => `${e.action}:${e.tab}`);
+  assert.ok(summary.indexOf('Removed:Entries') < summary.indexOf('Added:Entries'), 'newest first');
+  const update = log.events.find((e) => e.action === 'Updated' && e.tab === 'Buses');
+  assert.deepEqual(update.changes.map((c) => c.field), ['driver_name', 'year', 'seats']);
+  assert.equal(update.record_id, '04');
+  assert.equal(update.user, 'office@school.test');
+  const removed = log.events.find((e) => e.action === 'Removed');
+  assert.equal(removed.changes[0].new_value, 'Entered twice by mistake');
+  assert.deepEqual(log.actions, ['Added', 'Removed', 'Updated']);
+  assert.equal(log.total, log.events.length);
+});
+
+test('the change log can be filtered by action and searched', async () => {
+  const { service } = setup({ Buses: [bus('04'), bus('05')] });
+  await service.updateBus('04', { driver_name: 'Kumar' });
+  await service.updateBus('05', { driver_name: 'Selvi' });
+  const v = await service.saveEntry(visit({ bus_no: '05' }));
+  await service.voidEntry(v.entry_id, 'Wrong bus entirely');
+
+  assert.deepEqual((await service.getChangeLog({ action: 'removed' })).events.map((e) => e.action), ['Removed']);
+  assert.equal((await service.getChangeLog({ q: 'selvi' })).total, 1);
+  assert.equal((await service.getChangeLog({ q: 'WRONG BUS' })).total, 1);
+  assert.equal((await service.getChangeLog({ q: 'office@school.test' })).total, (await service.getChangeLog()).total);
+  assert.equal((await service.getChangeLog({ q: 'nothing like this' })).total, 0);
+  assert.equal((await service.getChangeLog({ action: 'Updated', q: 'kumar' })).total, 1);
+});
+
+test('the change log is paged, and odd page numbers are tolerated', async () => {
+  const { service } = setup({ Buses: Array.from({ length: 60 }, (_, i) => bus(String(i + 1).padStart(2, '0'))) });
+  for (let i = 1; i <= 60; i++) await service.updateBus(String(i).padStart(2, '0'), { driver_name: `Driver ${i}` });
+  const first = await service.getChangeLog();
+  assert.deepEqual([first.total, first.pages, first.page, first.events.length], [60, 2, 1, 50]);
+  const second = await service.getChangeLog({ page: 2 });
+  assert.equal(second.events.length, 10);
+  assert.notEqual(second.events[0].record_id, first.events[0].record_id);
+  assert.equal((await service.getChangeLog({ page: 99 })).page, 2);
+  assert.equal((await service.getChangeLog({ page: -4 })).page, 1);
+  assert.equal((await service.getChangeLog({ page: 'abc' })).page, 1);
+});
+
+test('the change log copes with an empty log and with rows that have no record id', async () => {
+  const { storage, service } = setup();
+  assert.deepEqual(await service.getChangeLog(), { total: 0, page: 1, pages: 1, pageSize: 50, actions: [], events: [] });
+  storage.tables['Change log'].push({ timestamp: '2026-10-22 09:00', user: 'demo', action: 'Added', tab: 'All', record_id: '', field: '', old_value: '', new_value: 'Demo data loaded' });
+  const log = await service.getChangeLog();
+  assert.equal(log.events[0].changes[0].new_value, 'Demo data loaded');
+});

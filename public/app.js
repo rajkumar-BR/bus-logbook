@@ -16,7 +16,14 @@ const STATUS_PILL = { 'On route': 'ok', 'In workshop': 'crit', 'Out of service':
 const pill = (status) => `<span class="pill ${STATUS_PILL[status] || 'warn'}"><i></i>${esc(status)}</span>`;
 const REPEAT_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 12a8 8 0 0 1 14-5.3M20 12a8 8 0 0 1-14 5.3"/><path d="M18 3v4h-4M6 21v-4h4"/></svg>';
 
+// Each time the user opens a page, navId goes up. A page load that was started before that and finishes
+// after it is thrown away, so a slow page can never overwrite the one the user asked for last.
+let navId = 0;
+class StaleView extends Error {}
+
 async function api(url, opts) {
+  const startedAt = navId;
+  const isRead = !opts || !opts.method || opts.method === 'GET'; // saves are never dropped
   let res;
   try {
     res = await fetch(url, { ...(opts || {}), credentials: 'same-origin' });
@@ -25,6 +32,7 @@ async function api(url, opts) {
   }
   let body = {};
   try { body = await res.json(); } catch { /* empty body */ }
+  if (isRead && startedAt !== navId) throw new StaleView();
   if (res.status === 401) {
     window.location.href = '/login.html';
     throw new Error(body.error || 'Please log in.');
@@ -55,18 +63,20 @@ async function getLists(force = false) {
 
 // ---------- router
 
-const views = { fleet: viewFleet, daily: viewDaily, bus: viewBus, repeats: viewRepeats, new: viewNew, correct: viewCorrect, buses: viewBuses, import: viewImport, editbus: viewEditBus };
-const NAV_FOR = { fleet: '#fleet', daily: '#daily', bus: '#fleet', repeats: '#repeats', new: '#new', correct: '#new', buses: '#buses', import: '#import', editbus: '#fleet' };
+const views = { fleet: viewFleet, daily: viewDaily, bus: viewBus, repeats: viewRepeats, new: viewNew, correct: viewCorrect, buses: viewBuses, import: viewImport, editbus: viewEditBus, changelog: viewChangeLog };
+const NAV_FOR = { fleet: '#fleet', daily: '#daily', bus: '#fleet', repeats: '#repeats', new: '#new', correct: '#new', buses: '#buses', import: '#import', editbus: '#fleet', changelog: '#changelog' };
 
 async function router() {
   const [name, arg] = location.hash.slice(1).split('/');
   const view = views[name] ? name : 'fleet';
   $$('.nav button').forEach((b) => b.toggleAttribute('aria-current', b.dataset.go === NAV_FOR[view]));
   $$('.nav button[aria-current]').forEach((b) => b.setAttribute('aria-current', 'page'));
+  const thisNav = ++navId;
   main.innerHTML = '<p class="loading">Loading…</p>';
   try {
     await views[view](arg ? decodeURIComponent(arg) : undefined);
   } catch (err) {
+    if (err instanceof StaleView || thisNav !== navId) return; // the user has already moved on
     main.innerHTML = `<div class="topbar"><h1>Something went wrong</h1></div><div class="error">${esc(err.message)}</div>`;
   }
   window.scrollTo(0, 0);
@@ -738,6 +748,77 @@ async function viewBuses() {
       $('#bus-error').hidden = false;
     }
   });
+}
+
+// ---------- Change log
+
+const LOG_WHAT = { Entries: 'service visit', Buses: 'bus', 'Parts changed': 'parts', 'Daily reports': 'daily report', Trips: 'trip', 'Bus documents': 'document', Workshops: 'workshop' };
+const prettyField = (f) => String(f || '').replace(/_/g, ' ');
+
+function logEvent(ev) {
+  const what = LOG_WHAT[ev.tab] || '';
+  let title;
+  if (ev.tab === 'Import') title = 'Imported from Excel';
+  else if (ev.tab === 'Buses' && ev.record_id) title = `${ev.action} bus <a href="#bus/${encodeURIComponent(ev.record_id)}">${esc(ev.record_id)}</a>`;
+  else title = `${esc(ev.action)} ${esc(what)}${ev.record_id ? ` <span class="mono">${esc(ev.record_id)}</span>` : ''}`.trim();
+
+  const lines = ev.changes.map((c) => {
+    if (ev.action === 'Removed') return `<li>Reason: <b>${esc(c.new_value)}</b><br><span class="hint">Was: ${esc(c.old_value || '—')}</span></li>`;
+    if (c.field) return `<li><span class="hint">${esc(prettyField(c.field))}:</span> ${esc(c.old_value || '—')} → <b>${esc(c.new_value || '—')}</b></li>`;
+    return c.new_value ? `<li>${esc(c.new_value)}</li>` : '';
+  }).join('');
+  return `<li class="logrow"><div class="logwhen mono">${esc(ev.timestamp)}</div>
+    <div><div class="logtitle">${title}</div>${lines ? `<ul class="logdetail">${lines}</ul>` : ''}</div>
+    <div class="logwho hint">${esc(ev.user || '')}</div></li>`;
+}
+
+async function viewChangeLog() {
+  const state = { action: '', q: '', page: 1 };
+  main.innerHTML = `
+    <div class="topbar"><div><h1>Change log</h1><p class="sub">Everything that was added, corrected, edited or removed, and by whom</p></div></div>
+    <div class="panel">
+      <div class="panel-h" style="gap:10px">
+        <div class="filters" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <select id="log-action" aria-label="Kind of change"><option value="">All changes</option></select>
+          <input id="log-q" type="search" placeholder="Search a bus, entry, name or word" aria-label="Search the change log" style="min-width:230px">
+        </div>
+        <span class="hint" id="log-count"></span>
+      </div>
+      <div id="log-body"><p class="loading">Loading…</p></div>
+      <div class="btns" id="log-pager" style="padding:12px 16px" hidden>
+        <button class="btn ghost" id="log-prev" type="button">← Newer</button>
+        <span class="hint" id="log-page" style="align-self:center"></span>
+        <button class="btn ghost" id="log-next" type="button">Older →</button>
+      </div>
+    </div>`;
+
+  async function load() {
+    const body = $('#log-body');
+    try {
+      const params = new URLSearchParams({ page: state.page, ...(state.action && { action: state.action }), ...(state.q && { q: state.q }) });
+      const d = await api(`/api/changelog?${params}`);
+      state.page = d.page;
+      const select = $('#log-action');
+      if (select.options.length === 1) d.actions.forEach((a) => select.append(new Option(a, a)));
+      $('#log-count').textContent = `${d.total.toLocaleString('en-IN')} ${d.total === 1 ? 'event' : 'events'}`;
+      body.innerHTML = d.events.length
+        ? `<ol class="logs">${d.events.map(logEvent).join('')}</ol>`
+        : `<div class="empty"><b>${state.action || state.q ? 'Nothing matches' : 'Nothing recorded yet'}</b><span>${state.action || state.q ? 'Try a different word or choose "All changes".' : 'Changes appear here as the office adds and corrects records.'}</span></div>`;
+      $('#log-pager').hidden = d.pages <= 1;
+      $('#log-page').textContent = `Page ${d.page} of ${d.pages}`;
+      $('#log-prev').disabled = d.page <= 1;
+      $('#log-next').disabled = d.page >= d.pages;
+    } catch (err) {
+      body.innerHTML = `<div class="error" style="margin:16px">${esc(err.message)}</div>`;
+    }
+  }
+
+  $('#log-action').addEventListener('change', (e) => { state.action = e.target.value; state.page = 1; load(); });
+  let timer;
+  $('#log-q').addEventListener('input', (e) => { clearTimeout(timer); timer = setTimeout(() => { state.q = e.target.value.trim(); state.page = 1; load(); }, 250); });
+  $('#log-prev').addEventListener('click', () => { state.page -= 1; load(); window.scrollTo(0, 0); });
+  $('#log-next').addEventListener('click', () => { state.page += 1; load(); window.scrollTo(0, 0); });
+  await load();
 }
 
 // ---------- Edit a bus
