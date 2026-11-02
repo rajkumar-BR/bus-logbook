@@ -10,6 +10,7 @@ import { google } from 'googleapis';
 import { createStorage } from './src/storage/index.js';
 import { createService } from './src/service.js';
 import { createAccounts } from './src/accounts.js';
+import { contentTypeFor, isSafeLink } from './src/storage/files.js';
 import { createBillReader, UserError } from './src/ai.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -325,19 +326,41 @@ app.post('/api/bills/read', upload.single('bill'), wrap((req) => req.service.rea
 app.post('/api/entries', entryFiles, wrap((req) => req.service.saveEntry(entryFromForm(req), filesFrom(req))));
 app.post('/api/entries/:id/correct', entryFiles, wrap((req) => req.service.saveEntry(entryFromForm(req), filesFrom(req), { correctsId: req.params.id })));
 
-// Uploaded bills, photos and documents (only these folders are served).
-// Files saved before schools existed sit in un-prefixed folders; they belong to LEGACY_SCHOOL_ID, if set.
-const mayReadLegacyFiles = (req, res, next) => (!multi || req.user.school_id === process.env.LEGACY_SCHOOL_ID ? next() : res.status(403).send('Not available.'));
-for (const folder of ['Bills', 'Photos', 'Bus documents']) {
-  app.use(`/files/${encodeURIComponent(folder)}`, mayReadLegacyFiles, express.static(path.join(storage.root, folder), { dotfiles: 'deny', index: false }));
-}
 if (multi) {
-  // Each school's files live under schools/<its id>/ and only that school's users can open them.
-  app.use(
-    '/files/schools/:schoolId',
-    (req, res, next) => (req.params.schoolId === req.user.school_id ? next() : res.status(403).send('Not available.')),
-    (req, res, next) => express.static(path.join(storage.root, 'schools', req.params.schoolId), { dotfiles: 'deny', index: false })(req, res, next),
-  );
+  // Each organisation's files live under schools/<its id>/ and only its users can open them.
+  // Files saved before organisations existed sit in un-prefixed folders and belong to LEGACY_SCHOOL_ID, if set.
+  const mayOpen = (user, link) => {
+    const owner = /^schools\/([a-z0-9-]+)\//.exec(link);
+    if (owner) return owner[1] === user.school_id;
+    return /^(Bills|Photos|Bus documents)\//.test(link) && user.school_id === process.env.LEGACY_SCHOOL_ID;
+  };
+  app.get(/^\/files\/(.+)$/, async (req, res, next) => {
+    try {
+      const link = req.params[0];
+      if (!isSafeLink(link)) return res.status(404).send('File not found.');
+      if (!mayOpen(req.user, link)) return res.status(403).send('Not available.');
+      const file = await storage.files.read(link);
+      if (!file) return res.status(404).send('File not found.');
+      // Only known image and PDF types are shown in the browser; anything else downloads.
+      const type = contentTypeFor(link);
+      res.set({
+        'Content-Type': type || 'application/octet-stream',
+        'Content-Disposition': type ? 'inline' : 'attachment',
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'private, max-age=300',
+        ...(file.size ? { 'Content-Length': String(file.size) } : {}),
+      });
+      file.stream.on('error', next);
+      return file.stream.pipe(res);
+    } catch (err) {
+      return next(err);
+    }
+  });
+} else {
+  // Uploaded bills, photos and documents (only these folders are served).
+  for (const folder of ['Bills', 'Photos', 'Bus documents']) {
+    app.use(`/files/${encodeURIComponent(folder)}`, express.static(path.join(storage.root, folder), { dotfiles: 'deny', index: false }));
+  }
 }
 app.use(express.static(path.join(here, 'public')));
 
@@ -358,7 +381,7 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
 app.listen(PORT, HOST, () => {
   console.log(`\n  Bus Logbook is running:  http://localhost:${PORT}`);
   console.log(`  Storage backend:         ${storage.kind || 'local'}`);
-  console.log(`  Data folder:             ${storage.root || 'Google Drive folder'}`);
+  console.log(`  ${multi ? 'Files' : 'Data folder'}:${' '.repeat(multi ? 20 : 13)}${storage.files?.kind === 's3' ? `S3 bucket ${storage.files.bucket}` : storage.root || 'Google Drive folder'}`);
   console.log(multi ? '  Sign-in:                 school users from the database (see scripts/admin.js)' : `  Admin login:             ${ADMIN_EMAIL} / ${ADMIN_PASSWORD}`);
   console.log(`  Google OAuth:           ${googleOAuthEnabled ? 'enabled' : 'disabled'}`);
   console.log(`  AI bill reading:         ${process.env.ANTHROPIC_API_KEY ? 'on' : 'off (add ANTHROPIC_API_KEY to .env)'}`);

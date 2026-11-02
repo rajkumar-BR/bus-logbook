@@ -14,12 +14,11 @@
 // function against that snapshot, then writes the differences back before committing.
 // A transaction-level advisory lock serialises writers within one school.
 //
-// Bills and photos still live on local disk for now (borrowed from the local
-// adapter); they move to object storage in a later step.
+// Bills and photos are kept by the file store (src/storage/files.js): local disk or an S3 bucket.
 
 import pg from 'pg';
 import { TABS, columnsOf, typeOf } from '../schema.js';
-import { createLocalStorage } from './local-xlsx.js';
+import { createFiles } from './files.js';
 
 // Dates stay as 'YYYY-MM-DD' strings instead of JS Date objects.
 pg.types.setTypeParser(pg.types.builtins.DATE, (v) => v);
@@ -35,7 +34,7 @@ export function createPostgresStorage(env = process.env) {
   if (!env.DATABASE_URL) throw new Error('STORAGE=postgres needs DATABASE_URL, for example postgres://user:password@localhost:5432/buslog');
   const schema = env.DB_SCHEMA || 'public';
   const pool = new pg.Pool({ connectionString: env.DATABASE_URL, options: `-c search_path=${schema}` });
-  const files = createLocalStorage(env.DATA_DIR || './data'); // bills and photos, until object storage
+  const files = createFiles(env); // bills and photos
 
   const table = (tab) => `${ident(schema)}.${ident(tableName(tab))}`;
 
@@ -132,22 +131,22 @@ export function createPostgresStorage(env = process.env) {
     const own = operations(schoolId);
     return {
       kind: 'postgres',
-      root: files.root,
+      files,
       schoolId,
       read: own.read,
       transact: own.transact,
-      saveFile: (folder, fileName, buffer) => files.saveFile(`schools/${schoolId}/${folder}`, fileName, buffer),
-      fileUrl: files.fileUrl,
+      saveFile: (folder, fileName, buffer) => files.save(`schools/${schoolId}/${folder}`, fileName, buffer),
+      fileUrl: files.url,
     };
   }
 
   const close = () => pool.end();
 
   return {
-    kind: 'postgres', root: files.root, schema, pool,
+    kind: 'postgres', root: files.root, files, schema, pool,
     init, close, forSchool,
     read: base.read, transact: base.transact,
-    saveFile: files.saveFile, fileUrl: files.fileUrl,
+    saveFile: files.save, fileUrl: files.url,
   };
 }
 

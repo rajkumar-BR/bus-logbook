@@ -157,7 +157,22 @@ With `STORAGE=postgres` the app keeps all data in Postgres and serves many schoo
 - Every school has its own buses, entries, settings and files. Users can only ever see their own school.
 - Users sign in with email and password. Everyone in a school can see and edit everything in that school (no roles).
 - Passwords are stored as scrypt hashes, sessions live in the database (they survive restarts, last 24 hours), and ten wrong tries in 15 minutes block that email from that address.
-- Bills and photos are saved under `schools/<school-id>/` and only that school's users can open them. They still live on the server's disk (`DATA_DIR`); object storage is planned.
+- Bills and photos are saved under `schools/<org-id>/` and only that organisation's users can open them. The app checks who is asking and streams the file, so the bucket can stay private.
+
+**Where files are kept.** By default they go in folders under `DATA_DIR`. For a real deployment, point them at any S3-compatible bucket (Supabase Storage, Cloudflare R2, AWS S3), so the app server keeps no state and can restart or redeploy safely:
+
+```
+FILES=s3
+S3_BUCKET=bus-logbook-files
+S3_ENDPOINT=https://<project>.supabase.co/storage/v1/s3   # not needed for AWS S3
+S3_REGION=<region>
+S3_ACCESS_KEY_ID=...
+S3_SECRET_ACCESS_KEY=...
+```
+
+Create the bucket as *private*. File links are stored in the database as `schools/<org-id>/...` whichever backend is used, so files can be copied between backends without changing any record. Only images and PDFs are shown in the browser; every other file type is offered as a download. Files saved on disk before this existed are not moved automatically.
+
+To test against a local S3 server: `docker run -d --name buslog-s3 -p 9090:9090 adobe/s3mock`, create a bucket in it, then run the tests with `S3_ENDPOINT=http://localhost:9090 S3_BUCKET=<bucket> S3_ACCESS_KEY_ID=x S3_SECRET_ACCESS_KEY=y`.
 
 **Signup for new organisations.** The login page links to `/signup.html`, where an organisation enters its name, an email (its username) and a password. That creates the organisation and its first user and signs them in. Colleagues are added by you for now (`scripts/admin.js create-user`).
 
@@ -218,6 +233,7 @@ src/ai.js                 AI bill reading integration
 src/storage/index.js      storage adapter selection
 src/storage/local-xlsx.js  local Excel workbook storage
 src/storage/postgres.js   Postgres storage, one school at a time via forSchool()
+src/storage/files.js      bills and photos: local folders or an S3 bucket
 src/accounts.js           schools, users, passwords and sessions (Postgres mode)
 scripts/admin.js          create schools and users
 scripts/import-xlsx.js    copy an Excel workbook into a school

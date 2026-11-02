@@ -168,7 +168,7 @@ export function createLocalStorage(dataDir) {
 
 // ---------- helpers
 
-function clean(s) {
+export function clean(s) {
   return String(s).replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
 }
 
