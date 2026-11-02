@@ -9,6 +9,7 @@ import multer from 'multer';
 import { google } from 'googleapis';
 import { createStorage } from './src/storage/index.js';
 import { createService } from './src/service.js';
+import { createAccounts } from './src/accounts.js';
 import { createBillReader, UserError } from './src/ai.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -30,7 +31,13 @@ const googleOAuthClient = googleOAuthEnabled ? new google.auth.OAuth2(GOOGLE_CLI
 // `npm run demo` passes --demo to use the sample data folder instead of the real one.
 const storage = createStorage(process.argv.includes('--demo') ? { ...process.env, DATA_DIR: './demo-data' } : process.env);
 await storage.init();
-const service = createService(storage, { readBill: createBillReader(process.env.ANTHROPIC_API_KEY) });
+// Postgres storage serves many schools: users and sessions live in the database and each request
+// gets a service limited to the signed-in user's school. Other storage keeps the single admin login.
+const multi = typeof storage.forSchool === 'function';
+const accounts = multi ? createAccounts(storage) : null;
+if (accounts) await accounts.init();
+const readBill = createBillReader(process.env.ANTHROPIC_API_KEY);
+const service = multi ? null : createService(storage, { readBill });
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -44,6 +51,7 @@ const entryFiles = upload.fields([{ name: 'bill', maxCount: 1 }, { name: 'photos
 const tripPhotos = upload.array('photos', 3);
 
 const app = express();
+app.set('trust proxy', 1); // behind Render/Railway so req.secure and req.ip are right
 app.use(express.json({ limit: '1mb' }));
 
 function getSessionToken(req) {
@@ -52,21 +60,39 @@ function getSessionToken(req) {
   return match ? decodeURIComponent(match.slice(SESSION_COOKIE.length + 1)) : null;
 }
 
-function isAuthenticated(req) {
+async function currentUser(req) {
   const token = getSessionToken(req);
-  if (!token) return false;
-  return sessions.has(token);
+  if (!token) return null;
+  return multi ? accounts.getSession(token) : (sessions.get(token) || null);
+}
+
+function sessionCookie(req, token, maxAge) {
+  return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${req.secure ? '; Secure' : ''}`;
+}
+
+// Slows down password guessing: 10 wrong tries per address and email in 15 minutes.
+const failedLogins = new Map();
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_FAILS = 10;
+function loginBlocked(key) {
+  const f = failedLogins.get(key);
+  if (f && Date.now() - f.since > LOGIN_WINDOW_MS) failedLogins.delete(key);
+  return (failedLogins.get(key)?.count || 0) >= LOGIN_MAX_FAILS;
+}
+function loginFailed(key) {
+  const f = failedLogins.get(key) || { count: 0, since: Date.now() };
+  failedLogins.set(key, { ...f, count: f.count + 1 });
 }
 
 function requireAdmin(req, res, next) {
-  if (!isAuthenticated(req)) {
-    return res.status(401).json({ error: 'Please log in as the school admin.' });
+  if (!req.user) {
+    return res.status(401).json({ error: 'Please log in.' });
   }
   next();
 }
 
 app.get('/auth/google', (req, res) => {
-  if (!googleOAuthClient) {
+  if (!googleOAuthClient || multi) {
     return res.status(503).json({ error: 'Google OAuth is not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in your .env file.' });
   }
   const scopes = [
@@ -82,7 +108,7 @@ app.get('/auth/google', (req, res) => {
 });
 
 app.get('/auth/google/callback', async (req, res) => {
-  if (!googleOAuthClient) {
+  if (!googleOAuthClient || multi) {
     return res.status(503).send('Google OAuth is not configured.');
   }
   const code = String(req.query.code || '');
@@ -127,42 +153,65 @@ app.get('/auth/google/callback', async (req, res) => {
   }
 });
 
-app.post('/api/login', (req, res) => {
-  const email = String(req.body?.email || '').trim().toLowerCase();
-  const password = String(req.body?.password || '');
-  if (email !== ADMIN_EMAIL.toLowerCase() || password !== ADMIN_PASSWORD) {
-    return res.status(401).json({ error: 'Invalid school admin credentials.' });
+app.post('/api/login', async (req, res, next) => {
+  try {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const password = String(req.body?.password || '');
+    if (multi) {
+      const key = `${req.ip}|${email}`;
+      if (loginBlocked(key)) return res.status(429).json({ error: 'Too many failed attempts. Try again in 15 minutes.' });
+      const user = await accounts.login(email, password);
+      if (!user) {
+        loginFailed(key);
+        return res.status(401).json({ error: 'Wrong email or password.' });
+      }
+      failedLogins.delete(key);
+      const token = await accounts.createSession(user.user_id);
+      res.setHeader('Set-Cookie', sessionCookie(req, token, 86400));
+      return res.json({ ok: true, email: user.email });
+    }
+    if (email !== ADMIN_EMAIL.toLowerCase() || password !== ADMIN_PASSWORD) {
+      return res.status(401).json({ error: 'Invalid school admin credentials.' });
+    }
+    const token = crypto.randomBytes(24).toString('hex');
+    sessions.set(token, { email, provider: 'admin', at: Date.now() });
+    res.setHeader('Set-Cookie', sessionCookie(req, token, 86400));
+    return res.json({ ok: true, email });
+  } catch (err) {
+    return next(err);
   }
-  const token = crypto.randomBytes(24).toString('hex');
-  sessions.set(token, { email, provider: 'admin', at: Date.now() });
-  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`);
-  return res.json({ ok: true, email });
 });
 
-app.post('/api/logout', (req, res) => {
-  const token = getSessionToken(req);
-  if (token) sessions.delete(token);
-  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
-  res.json({ ok: true });
+app.post('/api/logout', async (req, res, next) => {
+  try {
+    const token = getSessionToken(req);
+    if (token) {
+      if (multi) await accounts.deleteSession(token);
+      else sessions.delete(token);
+    }
+    res.setHeader('Set-Cookie', sessionCookie(req, '', 0));
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
 });
 
-app.use((req, res, next) => {
-  const publicPaths = ['/login.html', '/login.js', '/api/login', '/api/logout'];
-  if (publicPaths.includes(req.path)) {
+app.use(async (req, res, next) => {
+  try {
+    const publicPaths = ['/login.html', '/login.js', '/api/login', '/api/logout'];
+    if (publicPaths.includes(req.path)) return next();
+    req.user = await currentUser(req);
+    if (!req.user) {
+      if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Please log in.' });
+      return res.redirect('/login.html');
+    }
+    req.service = multi
+      ? createService(storage.forSchool(req.user.school_id), { readBill, user: req.user.email })
+      : service;
     return next();
+  } catch (err) {
+    return next(err);
   }
-  if (req.path.startsWith('/api/')) {
-    if (!isAuthenticated(req)) return res.status(401).json({ error: 'Please log in as the school admin.' });
-    return next();
-  }
-  if (req.path.startsWith('/files/')) {
-    if (!isAuthenticated(req)) return res.redirect('/login.html');
-    return next();
-  }
-  if (!isAuthenticated(req)) {
-    return res.redirect('/login.html');
-  }
-  next();
 });
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res)).then((out) => res.json(out)).catch(next);
@@ -171,23 +220,33 @@ const entryFromForm = (req) => {
 };
 const filesFrom = (req) => ({ bill: req.files?.bill?.[0], photos: req.files?.photos || [] });
 
-app.get('/api/lists', wrap(() => service.getLists()));
-app.get('/api/fleet', wrap(() => service.getFleet()));
-app.get('/api/buses', wrap(() => service.listBuses()));
-app.post('/api/buses', requireAdmin, wrap((req) => service.addBus(req.body)));
-app.get('/api/buses/:busNo', wrap((req) => service.getBus(req.params.busNo)));
-app.get('/api/repeats', wrap(() => service.getRepeats()));
-app.get('/api/reports/daily', wrap((req) => service.getDailyReport(String(req.query.start_date || ''), String(req.query.end_date || req.query.start_date || ''), String(req.query.bus_no || ''))));
-app.post('/api/reports/daily', tripPhotos, wrap((req) => service.saveDailyReport(JSON.parse(req.body.report || '{}'), req.files || [])));
-app.get('/api/entries/:id', wrap((req) => service.getEntry(req.params.id)));
-app.post('/api/check-repeat', wrap((req) => service.checkRepeat(req.body)));
-app.post('/api/bills/read', upload.single('bill'), wrap((req) => service.readBillFields(req.file)));
-app.post('/api/entries', entryFiles, wrap((req) => service.saveEntry(entryFromForm(req), filesFrom(req))));
-app.post('/api/entries/:id/correct', entryFiles, wrap((req) => service.saveEntry(entryFromForm(req), filesFrom(req), { correctsId: req.params.id })));
+app.get('/api/lists', wrap((req) => req.service.getLists()));
+app.get('/api/fleet', wrap((req) => req.service.getFleet()));
+app.get('/api/buses', wrap((req) => req.service.listBuses()));
+app.post('/api/buses', requireAdmin, wrap((req) => req.service.addBus(req.body)));
+app.get('/api/buses/:busNo', wrap((req) => req.service.getBus(req.params.busNo)));
+app.get('/api/repeats', wrap((req) => req.service.getRepeats()));
+app.get('/api/reports/daily', wrap((req) => req.service.getDailyReport(String(req.query.start_date || ''), String(req.query.end_date || req.query.start_date || ''), String(req.query.bus_no || ''))));
+app.post('/api/reports/daily', tripPhotos, wrap((req) => req.service.saveDailyReport(JSON.parse(req.body.report || '{}'), req.files || [])));
+app.get('/api/entries/:id', wrap((req) => req.service.getEntry(req.params.id)));
+app.post('/api/check-repeat', wrap((req) => req.service.checkRepeat(req.body)));
+app.post('/api/bills/read', upload.single('bill'), wrap((req) => req.service.readBillFields(req.file)));
+app.post('/api/entries', entryFiles, wrap((req) => req.service.saveEntry(entryFromForm(req), filesFrom(req))));
+app.post('/api/entries/:id/correct', entryFiles, wrap((req) => req.service.saveEntry(entryFromForm(req), filesFrom(req), { correctsId: req.params.id })));
 
 // Uploaded bills, photos and documents (only these folders are served).
+// Files saved before schools existed sit in un-prefixed folders; they belong to LEGACY_SCHOOL_ID, if set.
+const mayReadLegacyFiles = (req, res, next) => (!multi || req.user.school_id === process.env.LEGACY_SCHOOL_ID ? next() : res.status(403).send('Not available.'));
 for (const folder of ['Bills', 'Photos', 'Bus documents']) {
-  app.use(`/files/${encodeURIComponent(folder)}`, express.static(path.join(storage.root, folder), { dotfiles: 'deny', index: false }));
+  app.use(`/files/${encodeURIComponent(folder)}`, mayReadLegacyFiles, express.static(path.join(storage.root, folder), { dotfiles: 'deny', index: false }));
+}
+if (multi) {
+  // Each school's files live under schools/<its id>/ and only that school's users can open them.
+  app.use(
+    '/files/schools/:schoolId',
+    (req, res, next) => (req.params.schoolId === req.user.school_id ? next() : res.status(403).send('Not available.')),
+    (req, res, next) => express.static(path.join(storage.root, 'schools', req.params.schoolId), { dotfiles: 'deny', index: false })(req, res, next),
+  );
 }
 app.use(express.static(path.join(here, 'public')));
 
@@ -209,7 +268,7 @@ app.listen(PORT, HOST, () => {
   console.log(`\n  Bus Logbook is running:  http://localhost:${PORT}`);
   console.log(`  Storage backend:         ${storage.kind || 'local'}`);
   console.log(`  Data folder:             ${storage.root || 'Google Drive folder'}`);
-  console.log(`  Admin login:             ${ADMIN_EMAIL} / ${ADMIN_PASSWORD}`);
+  console.log(multi ? '  Sign-in:                 school users from the database (see scripts/admin.js)' : `  Admin login:             ${ADMIN_EMAIL} / ${ADMIN_PASSWORD}`);
   console.log(`  Google OAuth:           ${googleOAuthEnabled ? 'enabled' : 'disabled'}`);
   console.log(`  AI bill reading:         ${process.env.ANTHROPIC_API_KEY ? 'on' : 'off (add ANTHROPIC_API_KEY to .env)'}`);
   console.log('\n  Keep this window open while using the app. Press Ctrl+C to stop.\n');

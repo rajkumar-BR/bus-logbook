@@ -1,19 +1,24 @@
 // Postgres storage: one table per tab in schema.js, same adapter interface as
 // local-xlsx.js (init, read, transact, saveFile, fileUrl), so service.js is unchanged.
 //
+// Many schools share these tables. storage.forSchool(id) returns the same interface
+// limited to one school: reads only see that school's rows, appended rows are stamped
+// with its id, updates can only touch its rows, and uploaded files go under
+// schools/<id>/. The plain storage object (no school) sees every row; only scripts use it.
+//
 // Values come back exactly as the Excel adapter returns them: empty is '', dates
 // and datetimes are strings, numbers are numbers, bools are booleans.
 //
 // service.js calls tx.read / tx.append / tx.update synchronously, so transact()
-// loads every table into memory inside a database transaction, runs the function
-// against that snapshot, then writes the differences back before committing.
-// A transaction-level advisory lock serialises writers.
+// loads the school's tables into memory inside a database transaction, runs the
+// function against that snapshot, then writes the differences back before committing.
+// A transaction-level advisory lock serialises writers within one school.
 //
 // Bills and photos still live on local disk for now (borrowed from the local
 // adapter); they move to object storage in a later step.
 
 import pg from 'pg';
-import { TABS, DEFAULT_LISTS, DEFAULT_SETTINGS, columnsOf, typeOf } from '../schema.js';
+import { TABS, columnsOf, typeOf } from '../schema.js';
 import { createLocalStorage } from './local-xlsx.js';
 
 // Dates stay as 'YYYY-MM-DD' strings instead of JS Date objects.
@@ -21,6 +26,7 @@ pg.types.setTypeParser(pg.types.builtins.DATE, (v) => v);
 
 const SQL_TYPE = { text: 'text', datetime: 'text', date: 'date', number: 'double precision', bool: 'boolean' };
 const WRITE_LOCK = 727001;
+export const SCHOOL_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,40}$/;
 
 const ident = (name) => `"${String(name).replace(/"/g, '""')}"`;
 export const tableName = (tab) => tab.toLowerCase().replace(/[^a-z0-9]+/g, '_');
@@ -42,85 +48,112 @@ export function createPostgresStorage(env = process.env) {
       for (const [name, type] of TABS[tab]) {
         await pool.query(`ALTER TABLE ${table(tab)} ADD COLUMN IF NOT EXISTS ${ident(name)} ${SQL_TYPE[type]}`);
       }
+      await pool.query(`CREATE INDEX IF NOT EXISTS ${ident(`${tableName(tab)}_school`)} ON ${table(tab)} (school_id)`);
     }
-    await seed('Lists', () => {
-      const longest = Math.max(...Object.values(DEFAULT_LISTS).map((l) => l.length));
-      return Array.from({ length: longest }, (_, i) => Object.fromEntries(columnsOf('Lists').map((c) => [c, DEFAULT_LISTS[c][i] ?? ''])));
-    });
-    await seed('Settings', () => DEFAULT_SETTINGS.map(([key, value]) => ({ key, value })));
     await files.init();
   }
 
-  async function seed(tab, makeRows) {
-    const { rows } = await pool.query(`SELECT 1 FROM ${table(tab)} LIMIT 1`);
-    if (rows.length) return;
-    await transact((tx) => tx.append(tab, makeRows()));
-  }
+  // The data operations for one school, or for all rows when schoolId is null.
+  function operations(schoolId) {
+    const scoped = schoolId !== null;
+    const filter = scoped ? ' WHERE school_id = $1' : '';
+    const params = scoped ? [schoolId] : [];
+    const select = (client, tab) => client.query(`SELECT * FROM ${table(tab)}${filter} ORDER BY _id`, params);
 
-  async function read(tab) {
-    const { rows } = await pool.query(`SELECT * FROM ${table(tab)} ORDER BY _id`);
-    return rows.map((r) => fromRow(tab, r));
-  }
-
-  async function transact(fn) {
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query('SELECT pg_advisory_xact_lock($1)', [WRITE_LOCK]);
-
-      const mem = {};
-      for (const tab of Object.keys(TABS)) {
-        const { rows } = await client.query(`SELECT * FROM ${table(tab)} ORDER BY _id`);
-        mem[tab] = rows.map((r) => tracked(fromRow(tab, r), r._id));
-      }
-      const snapshot = (tab) => mem[tab].map((r) => ({ ...r }));
-
-      const tx = {
-        read: snapshot,
-        append(tab, rows) {
-          for (const obj of rows) mem[tab].push(tracked(fromObject(tab, obj), null));
-        },
-        // patch is applied to every row where match(row) is true; returns [{before, after}]
-        update(tab, match, patch) {
-          const cols = columnsOf(tab);
-          const changes = [];
-          for (const row of mem[tab]) {
-            const before = { ...row };
-            if (!match(before)) continue;
-            for (const [k, v] of Object.entries(patch)) if (cols.includes(k)) row[k] = normalise(tab, k, v);
-            row[DIRTY] = true;
-            changes.push({ before, after: { ...before, ...patch } });
-          }
-          return changes;
-        },
-      };
-
-      const result = await fn(tx);
-
-      for (const tab of Object.keys(TABS)) {
-        for (const row of mem[tab]) {
-          if (row[ROW_ID] === null) await insertRow(client, tab, row);
-          else if (row[DIRTY]) await updateRow(client, tab, row);
-        }
-      }
-      await client.query('COMMIT');
-      return result;
-    } catch (err) {
-      await client.query('ROLLBACK').catch(() => {});
-      throw err;
-    } finally {
-      client.release();
+    async function read(tab) {
+      const { rows } = await select(pool, tab);
+      return rows.map((r) => fromRow(tab, r));
     }
+
+    async function transact(fn) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('SELECT pg_advisory_xact_lock($1, hashtext($2))', [WRITE_LOCK, scoped ? schoolId : '']);
+
+        const mem = {};
+        for (const tab of Object.keys(TABS)) {
+          const { rows } = await select(client, tab);
+          mem[tab] = rows.map((r) => tracked(fromRow(tab, r), r._id));
+        }
+        const snapshot = (tab) => mem[tab].map((r) => ({ ...r }));
+
+        const tx = {
+          read: snapshot,
+          append(tab, rows) {
+            for (const obj of rows) {
+              const row = fromObject(tab, obj);
+              if (scoped) row.school_id = schoolId;
+              mem[tab].push(tracked(row, null));
+            }
+          },
+          // patch is applied to every row where match(row) is true; returns [{before, after}]
+          update(tab, match, patch) {
+            const cols = columnsOf(tab);
+            const changes = [];
+            for (const row of mem[tab]) {
+              const before = { ...row };
+              if (!match(before)) continue;
+              for (const [k, v] of Object.entries(patch)) {
+                if (cols.includes(k) && !(scoped && k === 'school_id')) row[k] = normalise(tab, k, v);
+              }
+              row[DIRTY] = true;
+              changes.push({ before, after: { ...before, ...patch } });
+            }
+            return changes;
+          },
+        };
+
+        const result = await fn(tx);
+
+        for (const tab of Object.keys(TABS)) {
+          for (const row of mem[tab]) {
+            if (row[ROW_ID] === null) await insertRow(client, tab, row);
+            else if (row[DIRTY]) await updateRow(client, tab, row);
+          }
+        }
+        await client.query('COMMIT');
+        return result;
+      } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw err;
+      } finally {
+        client.release();
+      }
+    }
+
+    return { read, transact };
+  }
+
+  const base = operations(null);
+
+  function forSchool(schoolId) {
+    if (!SCHOOL_ID_PATTERN.test(String(schoolId))) throw new Error(`"${schoolId}" is not a valid school id.`);
+    const own = operations(schoolId);
+    return {
+      kind: 'postgres',
+      root: files.root,
+      schoolId,
+      read: own.read,
+      transact: own.transact,
+      saveFile: (folder, fileName, buffer) => files.saveFile(`schools/${schoolId}/${folder}`, fileName, buffer),
+      fileUrl: files.fileUrl,
+    };
   }
 
   const close = () => pool.end();
 
-  return { kind: 'postgres', root: files.root, pool, init, read, transact, close, saveFile: files.saveFile, fileUrl: files.fileUrl };
+  return {
+    kind: 'postgres', root: files.root, schema, pool,
+    init, close, forSchool,
+    read: base.read, transact: base.transact,
+    saveFile: files.saveFile, fileUrl: files.fileUrl,
+  };
 }
 
 // ---------- helpers
 
-// Bookkeeping lives under symbols so it never shows up when rows are spread or serialised.
+// Bookkeeping lives under symbols, non-enumerable, so it never shows up when rows are spread or serialised.
 const ROW_ID = Symbol('rowId');
 const DIRTY = Symbol('dirty');
 
@@ -132,7 +165,7 @@ function tracked(obj, id) {
 
 async function insertRow(client, tab, row) {
   const cols = columnsOf(tab);
-  const values = cols.map((c) => toDb(tab, c, row[c]));
+  const values = cols.map((c) => toDb(row[c]));
   const marks = cols.map((_, i) => `$${i + 1}`);
   await client.query(`INSERT INTO ${ident(tableName(tab))} (${cols.map(ident).join(', ')}) VALUES (${marks.join(', ')})`, values);
 }
@@ -140,7 +173,7 @@ async function insertRow(client, tab, row) {
 async function updateRow(client, tab, row) {
   const cols = columnsOf(tab);
   const sets = cols.map((c, i) => `${ident(c)} = $${i + 1}`);
-  const values = cols.map((c) => toDb(tab, c, row[c]));
+  const values = cols.map((c) => toDb(row[c]));
   await client.query(`UPDATE ${ident(tableName(tab))} SET ${sets.join(', ')} WHERE _id = $${cols.length + 1}`, [...values, row[ROW_ID]]);
 }
 
@@ -167,6 +200,6 @@ function normalise(tab, col, v) {
   return String(v);
 }
 
-function toDb(tab, col, v) {
+function toDb(v) {
   return v === '' || v === undefined ? null : v;
 }

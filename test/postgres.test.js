@@ -4,23 +4,8 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import crypto from 'node:crypto';
-import os from 'node:os';
-import path from 'node:path';
-import { createPostgresStorage } from '../src/storage/postgres.js';
 import { createService } from '../src/service.js';
-
-const url = process.env.DATABASE_URL;
-const opts = { skip: url ? false : 'DATABASE_URL is not set' };
-
-async function freshStorage() {
-  const schema = `test_${crypto.randomBytes(4).toString('hex')}`;
-  const dataDir = path.join(os.tmpdir(), schema);
-  const storage = createPostgresStorage({ DATABASE_URL: url, DB_SCHEMA: schema, DATA_DIR: dataDir });
-  await storage.init();
-  storage.drop = async () => { await storage.pool.query(`DROP SCHEMA "${schema}" CASCADE`); await storage.close(); };
-  return storage;
-}
+import { opts, freshStorage } from './helpers/pg-storage.js';
 
 test('postgres: appended rows read back with the same shapes as the Excel adapter', opts, async () => {
   const storage = await freshStorage();

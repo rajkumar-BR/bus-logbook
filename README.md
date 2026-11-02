@@ -150,16 +150,40 @@ To enable AI-assisted bill entry:
 
 Then on the entry form, upload a bill and click `Read bill with AI`. The fields it fills are highlighted for review before saving. Nothing is saved until you click Save.
 
-## Multi-school-ready design
+## Postgres mode: many schools
 
-The code is structured so it can grow beyond a single school later without replacing the whole app:
+With `STORAGE=postgres` the app keeps all data in Postgres and serves many schools from one deployment. Excel and Google Drive modes still work as before, with the single `ADMIN_EMAIL` / `ADMIN_PASSWORD` login.
 
-- `src/schema.js` is the source of truth for workbook tabs and columns
-- `src/service.js` contains business logic and app operations
-- `src/storage/index.js` isolates the storage backend
-- `src/logic.js` contains reusable filtering helpers such as `recordsForSchool()`
+- Every school has its own buses, entries, settings and files. Users can only ever see their own school.
+- Users sign in with email and password. Everyone in a school can see and edit everything in that school (no roles).
+- Passwords are stored as scrypt hashes, sessions live in the database (they survive restarts, last 24 hours), and ten wrong tries in 15 minutes block that email from that address.
+- Bills and photos are saved under `schools/<school-id>/` and only that school's users can open them. They still live on the server's disk (`DATA_DIR`); object storage is planned.
 
-The future path is to add a `school_id` model and scope reads/writes by school while keeping current single-school data working with legacy rows.
+Set up:
+
+```bash
+# 1. a local database
+docker run -d --name buslog-pg -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=buslog -p 5432:5432 postgres:16
+# 2. in .env:  STORAGE=postgres   DATABASE_URL=postgres://postgres:dev@localhost:5432/buslog
+
+# 3. create a school and a user (the password is asked for, not typed on the command line)
+node --env-file=.env scripts/admin.js create-school "Little Flower School"
+node --env-file=.env scripts/admin.js create-user school-001 office@school.org
+
+npm start
+```
+
+Other `scripts/admin.js` commands: `list`, `set-password <email>`, `disable-user <email>`, `enable-user <email>`.
+
+**Bringing in a school's existing Excel records**
+
+```bash
+node --env-file=.env scripts/import-xlsx.js school-001 ./data
+```
+
+This refuses to run if the school already has history. If you imported with an earlier version that had no school ids, run `node --env-file=.env scripts/admin.js assign-legacy school-001` instead, and set `LEGACY_SCHOOL_ID=school-001` so that school can still open files saved before school folders existed.
+
+Run the database tests with `DATABASE_URL=postgres://postgres:dev@localhost:5432/buslog npm test`. Each test uses its own temporary schema.
 
 ## Developer notes
 
@@ -173,6 +197,10 @@ src/service.js            app operations and business workflows
 src/ai.js                 AI bill reading integration
 src/storage/index.js      storage adapter selection
 src/storage/local-xlsx.js  local Excel workbook storage
+src/storage/postgres.js   Postgres storage, one school at a time via forSchool()
+src/accounts.js           schools, users, passwords and sessions (Postgres mode)
+scripts/admin.js          create schools and users
+scripts/import-xlsx.js    copy an Excel workbook into a school
 public/                   web UI and login flow
 scripts/seed-demo.js      demo data generator
 test/                     automated tests

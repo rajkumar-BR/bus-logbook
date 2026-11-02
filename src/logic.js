@@ -51,7 +51,7 @@ export function listsFrom(rows) {
   const lists = {};
   for (const r of rows) {
     for (const [k, v] of Object.entries(r)) {
-      if (v === '' || v === false) continue;
+      if (k === 'school_id' || v === '' || v === false) continue;
       (lists[k] ||= []).push(String(v));
     }
   }

@@ -65,11 +65,11 @@ export const TABS = {
     ['school_id', 'text'], ['key', 'text'], ['value', 'text'],
   ],
   'Change log': [
-    ['timestamp', 'datetime'], ['user', 'text'], ['action', 'text'], ['tab', 'text'],
+    ['school_id', 'text'], ['timestamp', 'datetime'], ['user', 'text'], ['action', 'text'], ['tab', 'text'],
     ['record_id', 'text'], ['field', 'text'], ['old_value', 'text'], ['new_value', 'text'],
   ],
   'AI summaries': [
-    ['bus_no', 'text'], ['generated_at', 'datetime'], ['summary', 'text'], ['based_on_last_entry_id', 'text'],
+    ['school_id', 'text'], ['bus_no', 'text'], ['generated_at', 'datetime'], ['summary', 'text'], ['based_on_last_entry_id', 'text'],
   ],
 };
 
