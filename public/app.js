@@ -27,7 +27,11 @@ async function api(url, opts) {
   try { body = await res.json(); } catch { /* empty body */ }
   if (res.status === 401) {
     window.location.href = '/login.html';
-    throw new Error(body.error || 'Please log in as the school admin.');
+    throw new Error(body.error || 'Please log in.');
+  }
+  if (res.status === 403 && body.code) { // account waiting for approval, or suspended
+    window.location.href = '/pending.html';
+    throw new Error(body.error);
   }
   if (!res.ok) throw new Error(body.error || `Request failed (${res.status}).`);
   return body;

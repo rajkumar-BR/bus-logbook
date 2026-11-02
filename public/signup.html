@@ -21,13 +21,13 @@
 <body>
   <div class="card">
     <h1>Bus Logbook</h1>
-    <p>Create your school's account</p>
+    <p>Create your organisation's account</p>
     <div id="error" class="error"></div>
     <form id="signupForm">
-      <label for="schoolName">School name</label>
-      <input id="schoolName" name="schoolName" type="text" required minlength="2" maxlength="120" autocomplete="organization" placeholder="Little Flower School">
+      <label for="organisationName">Organisation name</label>
+      <input id="organisationName" name="organisationName" type="text" required minlength="2" maxlength="120" autocomplete="organization" placeholder="Little Flower School">
       <label for="email">Email (this is your username)</label>
-      <input id="email" name="email" type="email" required autocomplete="username" placeholder="office@school.org">
+      <input id="email" name="email" type="email" required autocomplete="username" placeholder="you@organisation.org">
       <label for="password">Password (at least 8 characters)</label>
       <input id="password" name="password" type="password" required minlength="8" maxlength="200" autocomplete="new-password">
       <label for="password2">Type the password again</label>
@@ -36,6 +36,7 @@
         <label for="code">Signup code</label>
         <input id="code" name="code" type="text" autocomplete="off" placeholder="Given to you by the person who sent this link">
       </div>
+      <p style="color:var(--muted);font-size:.9rem;margin:0 0 16px;">New accounts are activated after payment and approval.</p>
       <button type="submit" id="submit">Create account</button>
     </form>
     <p style="margin:16px 0 0;text-align:center;font-size:.95rem;">Already have an account? <a href="/login.html">Log in</a></p>

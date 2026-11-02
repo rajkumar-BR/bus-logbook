@@ -29,7 +29,7 @@ form.addEventListener('submit', async (event) => {
       headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
       body: JSON.stringify({
-        schoolName: document.getElementById('schoolName').value,
+        organisationName: document.getElementById('organisationName').value,
         email: document.getElementById('email').value.trim(),
         password,
         code: document.getElementById('code').value,

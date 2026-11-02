@@ -1,5 +1,7 @@
-// Schools, users and login sessions for the Postgres version.
-// Every user belongs to exactly one school and can see and edit all of that school's data.
+// Organisations (stored as "schools"), users and login sessions for the Postgres version.
+// Every user belongs to exactly one organisation and can see and edit all of its data.
+// An organisation is 'pending' (signed up, waiting for payment and approval), 'approved' or 'suspended'.
+// A blank status counts as approved, so organisations that existed before approval was added keep working.
 // Passwords are stored as scrypt hashes; session tokens are stored only as SHA-256 hashes.
 
 import crypto from 'node:crypto';
@@ -14,6 +16,9 @@ const KEY_LENGTH = 64;
 const MIN_PASSWORD = 8;
 const MAX_PASSWORD = 200; // scrypt is slow on purpose, so very long input is refused
 export const SESSION_HOURS = 24;
+
+export const ORG_STATUSES = ['pending', 'approved', 'suspended'];
+export const orgStatus = (raw) => (raw === 'pending' || raw === 'suspended' ? raw : 'approved');
 
 export async function hashPassword(password) {
   const salt = crypto.randomBytes(16);
@@ -62,16 +67,16 @@ export function createAccounts(storage) {
 
   // ---------- schools
 
-  async function createSchool({ name, shortName = '', region = '', id = null }) {
-    if (!String(name || '').trim()) throw new UserError('The school needs a name.');
+  async function createSchool({ name, shortName = '', region = '', id = null, status = 'approved' }) {
+    if (!String(name || '').trim()) throw new UserError('The organisation needs a name.');
     const schoolId = id || (await nextSchoolId());
-    if (!SCHOOL_ID_PATTERN.test(schoolId)) throw new UserError('A school id uses lowercase letters, digits and dashes, e.g. school-001.');
+    if (!SCHOOL_ID_PATTERN.test(schoolId)) throw new UserError('An organisation id uses lowercase letters, digits and dashes, e.g. school-001.');
     const own = storage.forSchool(schoolId);
-    if ((await own.read('Schools')).length) throw new UserError(`School ${schoolId} already exists.`);
+    if ((await own.read('Schools')).length) throw new UserError(`Organisation ${schoolId} already exists.`);
     await own.transact((tx) => {
-      if (tx.read('Schools').length) throw new UserError(`School ${schoolId} already exists.`); // two creations at once
+      if (tx.read('Schools').length) throw new UserError(`Organisation ${schoolId} already exists.`); // two creations at once
       tx.append('Schools', [{
-        school_name: name.trim(), short_name: shortName, region, active: true,
+        school_name: name.trim(), short_name: shortName, region, active: true, status,
         created_at: new Date().toISOString().slice(0, 16).replace('T', ' '),
       }]);
       const longest = Math.max(...Object.values(DEFAULT_LISTS).map((l) => l.length));
@@ -91,7 +96,7 @@ export function createAccounts(storage) {
 
   async function listSchools() {
     const { rows } = await pool.query(`
-      SELECT s.school_id, s.school_name,
+      SELECT s.school_id, s.school_name, s.status, s.created_at,
              (SELECT count(*)::int FROM ${t('app_users')} u WHERE u.school_id = s.school_id AND u.active) AS users
       FROM ${t('schools')} s ORDER BY s.school_id`);
     return rows;
@@ -99,7 +104,7 @@ export function createAccounts(storage) {
 
   // Phase 1 data has no school id. This stamps it with one, so the first school can keep its history.
   async function assignLegacyData(schoolId) {
-    if (!(await storage.forSchool(schoolId).read('Schools')).length) throw new UserError(`School ${schoolId} does not exist. Create it first.`);
+    if (!(await storage.forSchool(schoolId).read('Schools')).length) throw new UserError(`Organisation ${schoolId} does not exist. Create it first.`);
     const moved = {};
     const client = await pool.connect();
     try {
@@ -130,16 +135,23 @@ export function createAccounts(storage) {
     for (const tab of Object.keys(TABS)) await pool.query(`DELETE FROM ${t(tableName(tab))} WHERE school_id = $1`, [schoolId]);
   }
 
-  // Self-service signup: a school and its first user, created together. Returns the new user.
-  async function signUp({ schoolName, email, password }) {
-    const name = String(schoolName || '').trim().replace(/\s+/g, ' ');
-    if (name.length < 2 || name.length > 120) throw new UserError('Enter the school name (2 to 120 characters).');
+  async function setStatus(schoolId, status) {
+    if (!ORG_STATUSES.includes(status)) throw new UserError(`Status must be one of: ${ORG_STATUSES.join(', ')}.`);
+    const changed = await storage.forSchool(schoolId).transact((tx) => tx.update('Schools', () => true, { status }));
+    if (!changed.length) throw new UserError(`Organisation ${schoolId} does not exist.`);
+  }
+
+  // Self-service signup: an organisation and its first user, created together. The organisation
+  // starts 'pending' and cannot use the app until it has paid and been approved.
+  async function signUp({ organisationName, email, password }) {
+    const name = String(organisationName || '').trim().replace(/\s+/g, ' ');
+    if (name.length < 2 || name.length > 120) throw new UserError('Enter the organisation name (2 to 120 characters).');
     checkNewCredentials(email, password);
     const taken = await pool.query(`SELECT 1 FROM ${t('app_users')} WHERE lower(email) = $1`, [normaliseEmail(email)]);
     if (taken.rows.length) throw new UserError('That email already has an account. Log in instead.', 409);
 
     const schoolId = `school-${crypto.randomBytes(4).toString('hex')}`; // random, so ids do not reveal how many schools exist
-    await createSchool({ name, id: schoolId });
+    await createSchool({ name, id: schoolId, status: 'pending' });
     try {
       const userId = await createUser({ schoolId, email, password });
       return { user_id: userId, school_id: schoolId, email: normaliseEmail(email) };
@@ -153,7 +165,7 @@ export function createAccounts(storage) {
 
   async function createUser({ schoolId, email, password, name = '' }) {
     checkNewCredentials(email, password);
-    if (!(await storage.forSchool(schoolId).read('Schools')).length) throw new UserError(`School ${schoolId} does not exist.`);
+    if (!(await storage.forSchool(schoolId).read('Schools')).length) throw new UserError(`Organisation ${schoolId} does not exist.`);
     const hash = await hashPassword(password);
     try {
       const { rows } = await pool.query(
@@ -223,12 +235,15 @@ export function createAccounts(storage) {
   async function getSession(token) {
     if (!token) return null;
     const { rows } = await pool.query(
-      `SELECT u.user_id, u.school_id, u.email, u.name
+      `SELECT u.user_id, u.school_id, u.email, u.name, sc.status AS school_status
        FROM ${t('app_sessions')} s JOIN ${t('app_users')} u USING (user_id)
+       LEFT JOIN ${t('schools')} sc ON sc.school_id = u.school_id
        WHERE s.token_hash = $1 AND s.expires_at > now() AND u.active`,
       [sha256(token)],
     );
-    return rows[0] || null;
+    if (!rows[0]) return null;
+    const { school_status: status, ...user } = rows[0];
+    return { ...user, org_status: orgStatus(status) };
   }
 
   async function deleteSession(token) {
@@ -236,7 +251,7 @@ export function createAccounts(storage) {
   }
 
   return {
-    init, createSchool, signUp, listSchools, assignLegacyData,
+    init, createSchool, signUp, setStatus, listSchools, assignLegacyData,
     createUser, setPassword, setActive, listUsers, login,
     createSession, getSession, deleteSession,
   };

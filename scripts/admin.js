@@ -1,16 +1,18 @@
-// Manage schools and users (Postgres mode).
+// Manage organisations and users (Postgres mode).
 //   node --env-file=.env scripts/admin.js <command> [options]
 //
-//   create-school "Little Flower School" [--short LFS] [--region Kerala] [--id school-001]
-//   create-user <school-id> <email> [--name "Office"]     asks for the password
+//   create-org "Little Flower School" [--short LFS] [--region Kerala] [--id school-001]   (create-school also works)
+//   create-user <org-id> <email> [--name "Office"]       asks for the password
+//   approve <org-id>                                      switch on an organisation that signed up and paid
+//   suspend <org-id>                                      block an organisation (its users can still log in to see why)
 //   set-password <email>                                  asks for the new password; signs the user out everywhere
 //   disable-user <email> | enable-user <email>
-//   list                                                  schools and users
-//   assign-legacy <school-id>                             give rows that have no school (Phase 1 data) to this school
+//   list                                                  organisations (waiting ones first) and users
+//   assign-legacy <org-id>                                give rows that have no organisation (Phase 1 data) to this one
 
 import readline from 'node:readline';
 import { createPostgresStorage } from '../src/storage/postgres.js';
-import { createAccounts } from '../src/accounts.js';
+import { createAccounts, orgStatus } from '../src/accounts.js';
 
 const [command, ...rest] = process.argv.slice(2);
 const positional = [];
@@ -21,7 +23,7 @@ for (let i = 0; i < rest.length; i++) {
 }
 
 const usage = () => {
-  console.error('Commands: create-school, create-user, set-password, disable-user, enable-user, list, assign-legacy.\nSee the top of scripts/admin.js.');
+  console.error('Commands: create-org, create-user, approve, suspend, set-password, disable-user, enable-user, list, assign-legacy.\nSee the top of scripts/admin.js.');
   process.exit(1);
 };
 
@@ -58,7 +60,7 @@ try {
   await storage.init();
   await accounts.init();
 
-  if (command === 'create-school') {
+  if (command === 'create-org' || command === 'create-school') {
     const id = await accounts.createSchool({ name: positional[0], shortName: flags.short, region: flags.region, id: flags.id });
     console.log(`Created ${id}. Next: node --env-file=.env scripts/admin.js create-user ${id} <email>`);
   } else if (command === 'create-user') {
@@ -70,20 +72,28 @@ try {
     if (!positional[0]) usage();
     await accounts.setPassword(positional[0], await newPassword());
     console.log('Password changed. The user was signed out everywhere.');
+  } else if (command === 'approve' || command === 'suspend') {
+    if (!positional[0]) usage();
+    await accounts.setStatus(positional[0], command === 'approve' ? 'approved' : 'suspended');
+    console.log(`${positional[0]} ${command === 'approve' ? 'approved. Its users can use the app now' : 'suspended. Its users are blocked immediately'}.`);
   } else if (command === 'disable-user' || command === 'enable-user') {
     if (!positional[0]) usage();
     await accounts.setActive(positional[0], command === 'enable-user');
     console.log(`${positional[0].toLowerCase()} ${command === 'enable-user' ? 'enabled' : 'disabled'}.`);
   } else if (command === 'list') {
     const users = await accounts.listUsers();
-    for (const s of await accounts.listSchools()) {
-      console.log(`${s.school_id}  ${s.school_name}`);
+    const rank = { pending: 0, suspended: 1 };
+    const schools = (await accounts.listSchools()).sort((a, b) => (rank[orgStatus(a.status)] ?? 2) - (rank[orgStatus(b.status)] ?? 2) || a.school_id.localeCompare(b.school_id));
+    for (const s of schools) {
+      const status = orgStatus(s.status);
+      const tag = status === 'pending' ? '   <-- WAITING FOR APPROVAL' : status === 'suspended' ? '   (suspended)' : '';
+      console.log(`${s.school_id}  ${s.school_name}${s.created_at ? `  [signed up ${s.created_at}]` : ''}${tag}`);
       for (const u of users.filter((x) => x.school_id === s.school_id)) console.log(`    ${u.email}${u.active ? '' : '  (disabled)'}`);
     }
   } else if (command === 'assign-legacy') {
     if (!positional[0]) usage();
     const moved = await accounts.assignLegacyData(positional[0]);
-    console.log(Object.keys(moved).length ? moved : 'No rows without a school were found.');
+    console.log(Object.keys(moved).length ? moved : 'No rows without an organisation were found.');
     console.log(`Files saved before schools existed are served only to ${positional[0]} when LEGACY_SCHOOL_ID=${positional[0]} is set.`);
   } else {
     usage();

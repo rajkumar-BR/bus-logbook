@@ -159,12 +159,21 @@ With `STORAGE=postgres` the app keeps all data in Postgres and serves many schoo
 - Passwords are stored as scrypt hashes, sessions live in the database (they survive restarts, last 24 hours), and ten wrong tries in 15 minutes block that email from that address.
 - Bills and photos are saved under `schools/<school-id>/` and only that school's users can open them. They still live on the server's disk (`DATA_DIR`); object storage is planned.
 
-**Signup for new schools.** The login page links to `/signup.html`, where a school enters its name, an email (its username) and a password. That creates the school and its first user, signs them in, and gives them an empty logbook. Colleagues at the same school are added by you for now (`scripts/admin.js create-user`).
+**Signup for new organisations.** The login page links to `/signup.html`, where an organisation enters its name, an email (its username) and a password. That creates the organisation and its first user and signs them in. Colleagues are added by you for now (`scripts/admin.js create-user`).
 
-- `SIGNUP_CODE=...` makes signup ask for a code, so only schools you have given the code to can join. Set it for any public deployment.
-- `ALLOW_SIGNUP=false` closes signup; you then create schools yourself with `scripts/admin.js`.
+**Payment and approval.** A new signup is *pending*: its users can log in, but they only see a "waiting for payment and approval" page, and every part of the app and API is blocked. You approve an organisation after it has paid:
+
+```bash
+node --env-file=.env scripts/admin.js list              # waiting organisations are listed first
+node --env-file=.env scripts/admin.js approve <org-id>  # takes effect at once, no re-login needed
+node --env-file=.env scripts/admin.js suspend <org-id>  # blocks an organisation immediately
+```
+
+Organisations created before approval existed, and those you create with `create-org`, are approved. In `.env`, `PAYMENT_URL` (an https payment link, such as a Razorpay Payment Link), `PAYMENT_NOTE` (e.g. the fee) and `SUPPORT_EMAIL` are shown to waiting organisations. Payment is checked by you for now; there is no automatic payment confirmation yet.
+
+- `SIGNUP_CODE=...` makes signup ask for a code. `ALLOW_SIGNUP=false` closes signup.
 - At most 5 signups an hour per address, and wrong codes are rate limited.
-- Emails are not verified yet, so anyone could register an address they don't own. A signup code is the protection until email verification is added.
+- Emails are not verified yet, so anyone could register an address they don't own.
 
 Set up:
 
@@ -174,7 +183,7 @@ docker run -d --name buslog-pg -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=buslog -p
 # 2. in .env:  STORAGE=postgres   DATABASE_URL=postgres://postgres:dev@localhost:5432/buslog
 
 # 3. create a school and a user (the password is asked for, not typed on the command line)
-node --env-file=.env scripts/admin.js create-school "Little Flower School"
+node --env-file=.env scripts/admin.js create-org "Little Flower School"
 node --env-file=.env scripts/admin.js create-user school-001 office@school.org
 
 npm start

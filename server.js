@@ -38,6 +38,10 @@ const accounts = multi ? createAccounts(storage) : null;
 // New schools can sign themselves up (Postgres mode). Set SIGNUP_CODE to require a code, or ALLOW_SIGNUP=false to close signup.
 const SIGNUP_ENABLED = multi && String(process.env.ALLOW_SIGNUP ?? 'true').toLowerCase() !== 'false';
 const SIGNUP_CODE = (process.env.SIGNUP_CODE || '').trim();
+// New organisations wait for payment and approval. These are shown to them while they wait.
+const PAYMENT_URL = /^https:\/\//.test(process.env.PAYMENT_URL || '') ? process.env.PAYMENT_URL.trim() : '';
+const PAYMENT_NOTE = (process.env.PAYMENT_NOTE || '').trim();
+const SUPPORT_EMAIL = (process.env.SUPPORT_EMAIL || '').trim();
 if (accounts) await accounts.init();
 const readBill = createBillReader(process.env.ANTHROPIC_API_KEY);
 const service = multi ? null : createService(storage, { readBill });
@@ -191,7 +195,7 @@ app.post('/api/signup', async (req, res, next) => {
       }
     }
     if (signupsBlocked(req.ip)) return res.status(429).json({ error: 'Too many accounts were created from this connection. Try again in an hour.' });
-    const user = await accounts.signUp({ schoolName: req.body?.schoolName, email: req.body?.email, password: req.body?.password });
+    const user = await accounts.signUp({ organisationName: req.body?.organisationName, email: req.body?.email, password: req.body?.password });
     signups.get(req.ip).push(Date.now());
     const token = await accounts.createSession(user.user_id);
     res.setHeader('Set-Cookie', sessionCookie(req, token, 86400));
@@ -244,6 +248,8 @@ app.post('/api/logout', async (req, res, next) => {
   }
 });
 
+const WAITING_PATHS = ['/pending.html', '/pending.js', '/api/account'];
+
 app.use(async (req, res, next) => {
   try {
     const publicPaths = ['/login.html', '/login.js', '/signup.html', '/signup.js', '/api/login', '/api/logout', '/api/signup', '/api/public-config'];
@@ -252,6 +258,20 @@ app.use(async (req, res, next) => {
     if (!req.user) {
       if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Please log in.' });
       return res.redirect('/login.html');
+    }
+    if (multi) {
+      // Organisations that have not been approved yet (or were suspended) can sign in, but only see their status.
+      if (req.user.org_status !== 'approved') {
+        if (WAITING_PATHS.includes(req.path)) return next();
+        if (req.path.startsWith('/api/')) {
+          const message = req.user.org_status === 'suspended'
+            ? 'This account is suspended. Please contact support.'
+            : 'Your account is waiting for payment and approval.';
+          return res.status(403).json({ error: message, code: req.user.org_status });
+        }
+        return res.redirect('/pending.html');
+      }
+      if (req.path === '/pending.html') return res.redirect('/');
     }
     req.service = multi
       ? createService(storage.forSchool(req.user.school_id), { readBill, user: req.user.email })
@@ -268,6 +288,17 @@ const entryFromForm = (req) => {
 };
 const filesFrom = (req) => ({ bill: req.files?.bill?.[0], photos: req.files?.photos || [] });
 
+app.get('/api/account', wrap(async (req) => {
+  const [org] = multi ? await storage.forSchool(req.user.school_id).read('Schools') : [];
+  return {
+    email: req.user.email,
+    organisation: org?.school_name || '',
+    status: multi ? req.user.org_status : 'approved',
+    paymentUrl: PAYMENT_URL,
+    paymentNote: PAYMENT_NOTE,
+    supportEmail: SUPPORT_EMAIL,
+  };
+}));
 app.get('/api/lists', wrap((req) => req.service.getLists()));
 app.get('/api/fleet', wrap((req) => req.service.getFleet()));
 app.get('/api/buses', wrap((req) => req.service.listBuses()));

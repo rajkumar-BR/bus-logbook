@@ -207,8 +207,8 @@ test('an Excel import lands in the importing school only, and importing twice ad
 test('signup creates a school and its first user, who can sign in and sees only that school', opts, async () => {
   const { storage, accounts } = await setup();
   try {
-    const one = await accounts.signUp({ schoolName: '  Little   Flower School ', email: 'Office@LF.test', password: 'long enough pw' });
-    const two = await accounts.signUp({ schoolName: 'St Mary School', email: 'office@stmary.test', password: 'another long pw' });
+    const one = await accounts.signUp({ organisationName: '  Little   Flower School ', email: 'Office@LF.test', password: 'long enough pw' });
+    const two = await accounts.signUp({ organisationName: 'St Mary School', email: 'office@stmary.test', password: 'another long pw' });
     assert.notEqual(one.school_id, two.school_id);
     assert.match(one.school_id, /^school-[0-9a-f]{8}$/);
     assert.equal((await storage.forSchool(one.school_id).read('Schools'))[0].school_name, 'Little Flower School');
@@ -224,14 +224,14 @@ test('signup creates a school and its first user, who can sign in and sees only 
 test('a signup that fails leaves no school behind', opts, async () => {
   const { storage, accounts } = await setup();
   try {
-    await accounts.signUp({ schoolName: 'School A', email: 'a@a.test', password: 'long enough pw' });
+    await accounts.signUp({ organisationName: 'School A', email: 'a@a.test', password: 'long enough pw' });
     const before = (await storage.read('Schools')).length;
 
-    await assert.rejects(accounts.signUp({ schoolName: 'School B', email: 'A@A.test', password: 'long enough pw' }), /already has an account/);
-    await assert.rejects(accounts.signUp({ schoolName: 'School B', email: 'b@b.test', password: 'short' }), /at least 8/);
-    await assert.rejects(accounts.signUp({ schoolName: 'School B', email: 'not-an-email', password: 'long enough pw' }), /valid email/);
-    await assert.rejects(accounts.signUp({ schoolName: 'x', email: 'b@b.test', password: 'long enough pw' }), /school name/);
-    await assert.rejects(accounts.signUp({ schoolName: 'School B', email: 'b@b.test', password: 'x'.repeat(201) }), /at most 200/);
+    await assert.rejects(accounts.signUp({ organisationName: 'School B', email: 'A@A.test', password: 'long enough pw' }), /already has an account/);
+    await assert.rejects(accounts.signUp({ organisationName: 'School B', email: 'b@b.test', password: 'short' }), /at least 8/);
+    await assert.rejects(accounts.signUp({ organisationName: 'School B', email: 'not-an-email', password: 'long enough pw' }), /valid email/);
+    await assert.rejects(accounts.signUp({ organisationName: 'x', email: 'b@b.test', password: 'long enough pw' }), /organisation name/);
+    await assert.rejects(accounts.signUp({ organisationName: 'School B', email: 'b@b.test', password: 'x'.repeat(201) }), /at most 200/);
     assert.equal((await storage.read('Schools')).length, before);
   } finally { await storage.drop(); }
 });
@@ -239,7 +239,7 @@ test('a signup that fails leaves no school behind', opts, async () => {
 test('two signups at the same moment both succeed, with separate schools', opts, async () => {
   const { storage, accounts } = await setup();
   try {
-    const results = await Promise.all(Array.from({ length: 6 }, (_, i) => accounts.signUp({ schoolName: `School ${i}`, email: `u${i}@s.test`, password: 'long enough pw' })));
+    const results = await Promise.all(Array.from({ length: 6 }, (_, i) => accounts.signUp({ organisationName: `School ${i}`, email: `u${i}@s.test`, password: 'long enough pw' })));
     assert.equal(new Set(results.map((r) => r.school_id)).size, 6);
     assert.equal((await storage.read('Schools')).length, 6);
   } finally { await storage.drop(); }
@@ -248,9 +248,44 @@ test('two signups at the same moment both succeed, with separate schools', opts,
 test('the same email signing up twice at once creates one account and no stray school', opts, async () => {
   const { storage, accounts } = await setup();
   try {
-    const attempts = await Promise.allSettled(Array.from({ length: 3 }, (_, i) => accounts.signUp({ schoolName: `School ${i}`, email: 'same@s.test', password: 'long enough pw' })));
+    const attempts = await Promise.allSettled(Array.from({ length: 3 }, (_, i) => accounts.signUp({ organisationName: `School ${i}`, email: 'same@s.test', password: 'long enough pw' })));
     assert.equal(attempts.filter((a) => a.status === 'fulfilled').length, 1);
     assert.equal((await storage.read('Schools')).length, 1);
     assert.equal((await accounts.listUsers()).length, 1);
+  } finally { await storage.drop(); }
+});
+
+test('organisations that sign up start pending; admin-created and older ones are approved', opts, async () => {
+  const { storage, accounts } = await setup();
+  try {
+    const signedUp = await accounts.signUp({ organisationName: 'New Org', email: 'new@org.test', password: 'long enough pw' });
+    const made = await accounts.createSchool({ name: 'Made By Admin' });
+    await accounts.createUser({ schoolId: made, email: 'admin@made.test', password: 'long enough pw' });
+    // an organisation from before approval existed has a blank status
+    await storage.transact((tx) => tx.append('Schools', [{ school_id: 'school-old', school_name: 'Old School' }]));
+    await accounts.createUser({ schoolId: 'school-old', email: 'old@old.test', password: 'long enough pw' });
+
+    const status = async (email, password) => (await accounts.getSession(await accounts.createSession((await accounts.login(email, password)).user_id))).org_status;
+    assert.equal(await status('new@org.test', 'long enough pw'), 'pending');
+    assert.equal(await status('admin@made.test', 'long enough pw'), 'approved');
+    assert.equal(await status('old@old.test', 'long enough pw'), 'approved');
+    assert.equal((await storage.forSchool(signedUp.school_id).read('Schools'))[0].status, 'pending');
+  } finally { await storage.drop(); }
+});
+
+test('approving and suspending change what an existing session sees, immediately', opts, async () => {
+  const { storage, accounts } = await setup();
+  try {
+    const { user_id, school_id } = await accounts.signUp({ organisationName: 'New Org', email: 'new@org.test', password: 'long enough pw' });
+    const token = await accounts.createSession(user_id);
+    assert.equal((await accounts.getSession(token)).org_status, 'pending');
+    await accounts.setStatus(school_id, 'approved');
+    assert.equal((await accounts.getSession(token)).org_status, 'approved');
+    await accounts.setStatus(school_id, 'suspended');
+    assert.equal((await accounts.getSession(token)).org_status, 'suspended');
+    await assert.rejects(accounts.setStatus(school_id, 'free'), /Status must be one of/);
+    await assert.rejects(accounts.setStatus('school-404', 'approved'), /does not exist/);
+    const list = await accounts.listSchools();
+    assert.equal(list[0].status, 'suspended');
   } finally { await storage.drop(); }
 });

@@ -10,7 +10,7 @@ export const WORKBOOK_NAME = 'Bus Logbook Data.xlsx';
 export const TABS = {
   Schools: [
     ['school_id', 'text'], ['school_name', 'text'], ['short_name', 'text'],
-    ['region', 'text'], ['active', 'bool'], ['created_at', 'datetime'],
+    ['region', 'text'], ['active', 'bool'], ['created_at', 'datetime'], ['status', 'text'],
   ],
   Buses: [
     ['school_id', 'text'], ['bus_no', 'text'], ['reg_no', 'text'], ['make_model', 'text'], ['year', 'number'],
