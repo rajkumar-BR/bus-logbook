@@ -72,7 +72,7 @@ By default they are saved in folders under `DATA_DIR`. For a hosted deployment, 
 ```
 FILES=s3
 S3_BUCKET=bus-logbook-files
-S3_ENDPOINT=https://<project>.supabase.co/storage/v1/s3   # not needed for AWS S3
+S3_ENDPOINT=https://<project-ref>.storage.supabase.co/storage/v1/s3   # not needed for AWS S3
 S3_REGION=<region>
 S3_ACCESS_KEY_ID=...
 S3_SECRET_ACCESS_KEY=...

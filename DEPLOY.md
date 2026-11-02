@@ -6,14 +6,17 @@ The app server keeps no data of its own: records are in Postgres and bills and p
 
 ## 1. Supabase: database and file bucket
 
-1. Create a project. Pick a region close to your users (Mumbai for India). Save the database password.
-2. **Database URL:** *Connect* → *Session pooler* → copy the URI and put your password in it. Use the session pooler, not the direct connection, because the direct one is IPv6-only on some plans. This is `DATABASE_URL`.
-3. **Bucket:** *Storage* → *New bucket* → name it `bus-logbook-files`, leave it **private**. This is `S3_BUCKET`.
-4. **S3 keys:** *Storage* → *S3 connection*. Copy the endpoint (`https://<project>.supabase.co/storage/v1/s3`) and region, and create an access key. These are `S3_ENDPOINT`, `S3_REGION`, `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY`.
+1. Create a project at supabase.com. Pick a region close to your users (Mumbai for India) and save the **database password** somewhere safe.
+2. **Database URL:** click **Connect** at the top of the project page, choose **Session pooler**, and copy the URI. It looks like `postgresql://postgres.<project-ref>:[YOUR-PASSWORD]@aws-0-<region>.pooler.supabase.com:5432/postgres`. Replace `[YOUR-PASSWORD]` with your password; if it contains characters like `@ # ? & /` or spaces, replace each with its percent code (`@` is `%40`, `#` is `%23`), or pick a simpler password. This is `DATABASE_URL`.
+   - Use the **session pooler**, not the transaction pooler (port 6543): the app keeps connections open and holds locks during saves.
+   - The direct connection only works over IPv6 unless you buy an add-on, and Render may not reach it. The session pooler works over IPv4.
+3. **Bucket:** *Storage* → *New bucket* → name it `bus-logbook-files` and leave **Public bucket OFF**. This is `S3_BUCKET`.
+4. **S3 keys:** *Storage* → *Settings* (or the S3 connection section) → create a new access key. Copy the **Access Key ID** and **Secret Access Key** now, because the secret is shown only once. These are `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY`. These keys can read and write every file in the project, so treat them like a password.
+5. On the same page, copy the **endpoint** and **region** shown there. The endpoint looks like `https://<project-ref>.storage.supabase.co/storage/v1/s3`. These are `S3_ENDPOINT` and `S3_REGION`.
 
 ## 2. Render: the app
 
-1. *New* → *Blueprint*, connect the GitHub repo, and choose the branch to deploy. [render.yaml](render.yaml) sets everything except the secrets.
+1. In Render: *New* → *Blueprint*, connect your GitHub account, pick the `bus-logbook` repo and the **`main`** branch. [render.yaml](render.yaml) sets everything except the secrets.
 2. Fill in the values it asks for:
 
    | Setting | Value |
@@ -24,7 +27,8 @@ The app server keeps no data of its own: records are in Postgres and bills and p
    | `PAYMENT_NOTE`, `SUPPORT_EMAIL` | shown to organisations waiting for approval |
    | `ANTHROPIC_API_KEY` | optional, turns on AI bill reading |
 
-3. Deploy. The tables are created on first start. Open `https://<your-service>.onrender.com/healthz`: it should say `{"ok":true}`.
+   Render asks for these only when you first create the Blueprint. To add or change one later, open the service → *Environment*. Leave optional ones blank if you don't need them. Render sets `PORT` itself.
+3. Deploy. The first build takes a few minutes. The tables are created on first start. Open `https://<your-service>.onrender.com/healthz`: it should say `{"ok":true}`.
 
 ## 3. Create your first organisation
 
@@ -49,7 +53,8 @@ Organisations you create this way are approved straight away. Ones that sign up 
 
 ## Costs and limits
 
-- **Render free plan** sleeps after 15 minutes without traffic, so the first request takes about a minute. Use the Starter plan for real use.
+- **Render free plan** sleeps after 15 minutes without traffic, and the first request then takes about a minute. It has 750 free hours a month and no shell access, which is why step 3 runs the admin commands from your own computer. Use the Starter plan for real use.
+- **Do not use Render's free Postgres:** it is deleted 30 days after creation, with no backups. Use Supabase for the database.
 - **Supabase free projects** pause after a week of inactivity and have no automatic backups. Use a paid plan for real schools.
 - **Backups:** if you stay on a plan without backups, take your own with `pg_dump "$DATABASE_URL" > backup.sql`, and copy the bucket now and then.
 
