@@ -50,8 +50,8 @@ async function getLists(force = false) {
 
 // ---------- router
 
-const views = { fleet: viewFleet, daily: viewDaily, bus: viewBus, repeats: viewRepeats, new: viewNew, correct: viewCorrect, buses: viewBuses };
-const NAV_FOR = { fleet: '#fleet', daily: '#daily', bus: '#fleet', repeats: '#repeats', new: '#new', correct: '#new', buses: '#buses' };
+const views = { fleet: viewFleet, daily: viewDaily, bus: viewBus, repeats: viewRepeats, new: viewNew, correct: viewCorrect, buses: viewBuses, import: viewImport };
+const NAV_FOR = { fleet: '#fleet', daily: '#daily', bus: '#fleet', repeats: '#repeats', new: '#new', correct: '#new', buses: '#buses', import: '#import' };
 
 async function router() {
   const [name, arg] = location.hash.slice(1).split('/');
@@ -685,6 +685,119 @@ async function viewBuses() {
       $('#bus-error').hidden = false;
     }
   });
+}
+
+// ---------- Import from Excel
+
+const IMPORT_LABELS = { Buses: 'Buses', Entries: 'Service visits', 'Parts changed': 'Parts changed', 'Bus documents': 'Documents', Workshops: 'Workshops' };
+const plural = (n, one, many) => `${n.toLocaleString('en-IN')} ${n === 1 ? one : many}`;
+
+function viewImport() {
+  let file = null;
+  main.innerHTML = `
+    <div class="topbar"><div><h1>Import from Excel</h1><p class="sub">Bring in the records you already keep in an Excel file</p></div></div>
+    <div class="panel" style="margin-bottom:18px">
+      <div class="panel-h"><h2>1. Choose your Excel file</h2></div>
+      <div class="busform">
+        <div class="drop" id="imp-drop">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 15V4M7 9l5-5 5 5"/><path d="M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></svg>
+          <b>Drop your .xlsx file here</b>
+          <div class="row"><label class="btn ghost" for="imp-file" style="cursor:pointer">Choose a file</label></div>
+          <input type="file" id="imp-file" accept=".xlsx" hidden>
+          <span class="hint" id="imp-name">Nothing is saved until you confirm in step 2.</span>
+        </div>
+        <p class="hint" style="grid-column:1/-1;margin:0">The logbook reads sheets with headings such as <b>Date, Bus No, Work Done, Garage, Amount</b>. Dates like 18/10/2026 are read day first. If your sheet looks different, <a href="/api/import/template">download the template</a> and copy your records into it.</p>
+      </div>
+    </div>
+    <div id="imp-result"></div>`;
+
+  const result = $('#imp-result');
+  const nameEl = $('#imp-name');
+  const drop = $('#imp-drop');
+
+  const send = (commit) => {
+    const body = new FormData();
+    body.append('file', file);
+    body.append('commit', commit ? '1' : '0');
+    return api('/api/import', { method: 'POST', body });
+  };
+
+  async function check() {
+    nameEl.textContent = file.name;
+    result.innerHTML = '<p class="loading">Reading the file…</p>';
+    try {
+      renderPreview(await send(false));
+    } catch (err) {
+      result.innerHTML = `<div class="error">${esc(err.message)}</div>`;
+    }
+  }
+
+  function renderPreview(r) {
+    const { add, skipped, errors } = r.totals;
+    const rows = r.tabs.map((t) => `<tr>
+      <td><b>${esc(IMPORT_LABELS[t.tab] || t.tab)}</b><br><span class="hint">from sheet "${esc(t.sheet)}"</span></td>
+      <td class="mono">${t.found.toLocaleString('en-IN')}</td>
+      <td class="mono"><b>${t.add.toLocaleString('en-IN')}</b></td>
+      <td class="mono">${t.skipped.toLocaleString('en-IN')}</td>
+      <td class="mono">${t.errorCount ? `<span style="color:var(--crit);font-weight:600">${t.errorCount.toLocaleString('en-IN')}</span>` : '0'}</td></tr>`).join('');
+    const problems = r.tabs.filter((t) => t.errorCount).map((t) => `
+      <div style="padding:12px 16px;border-top:1px solid var(--line)">
+        <b>${esc(IMPORT_LABELS[t.tab] || t.tab)}: rows that cannot be imported</b>
+        <ul style="margin:6px 0 0;padding-left:18px">${t.errors.map((e) => `<li>Row ${e.row}: ${esc(e.message)}</li>`).join('')}</ul>
+        ${t.errorCount > t.errors.length ? `<p class="hint" style="margin:6px 0 0">…and ${t.errorCount - t.errors.length} more.</p>` : ''}
+      </div>`).join('');
+
+    result.innerHTML = `
+      <div class="panel">
+        <div class="panel-h"><h2>2. Check, then import</h2></div>
+        ${r.tabs.length ? `
+        <div style="padding:14px 16px">
+          <b style="font-size:16px">${add ? `Ready to import ${plural(add, 'record', 'records')}` : 'Nothing new to import'}</b>
+          <span class="hint"> · ${plural(skipped, 'record is', 'records are')} already in the logbook and will be skipped${errors ? ` · <span style="color:var(--crit)">${plural(errors, 'row has a problem', 'rows have problems')}</span>` : ''}</span>
+        </div>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>What</th><th>Rows found</th><th>Will add</th><th>Already there</th><th>Problems</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>` : ''}
+        ${r.notes.length ? `<div style="padding:12px 16px;border-top:1px solid var(--line)"><b>Please note</b><ul style="margin:6px 0 0;padding-left:18px">${r.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul></div>` : ''}
+        ${problems}
+        ${errors ? '<p class="hint" style="padding:0 16px">Rows with problems are left out. Fix them in Excel and import the file again: records already imported are skipped, so nothing is duplicated.</p>' : ''}
+        ${r.ignoredSheets.length ? `<p class="hint" style="padding:0 16px">Sheets not used: ${r.ignoredSheets.map((n) => `"${esc(n)}"`).join(', ')}.</p>` : ''}
+        <div class="btns" style="padding:0 16px 16px">
+          <button class="btn" id="imp-go" type="button"${add ? '' : ' disabled'}>Import ${add ? plural(add, 'record', 'records') : ''}</button>
+          <button class="btn ghost" id="imp-other" type="button">Choose a different file</button>
+        </div>
+      </div>`;
+    $('#imp-other').addEventListener('click', () => $('#imp-file').click());
+    $('#imp-go').addEventListener('click', async (ev) => {
+      ev.target.disabled = true;
+      ev.target.textContent = 'Importing…';
+      try {
+        const done = await send(true);
+        listsCache = null;
+        result.innerHTML = `<div class="panel" style="padding:18px 16px">
+          <b style="font-size:16px">Imported ${plural(done.totals.add, 'record', 'records')} from ${esc(done.file)}.</b>
+          <p class="hint">Your fleet and bus histories now include them.</p>
+          <div class="btns"><button class="btn" data-go="#fleet">Open the fleet</button><button class="btn ghost" data-go="#buses">See the buses</button></div></div>`;
+        nameEl.textContent = 'Nothing is saved until you confirm in step 2.';
+        toast('Import finished.');
+      } catch (err) {
+        ev.target.disabled = false;
+        ev.target.textContent = 'Try again';
+        result.insertAdjacentHTML('afterbegin', `<div class="error" style="margin-bottom:12px">${esc(err.message)}</div>`);
+      }
+    });
+  }
+
+  const pick = (f) => {
+    if (!f) return;
+    file = f;
+    check();
+  };
+  $('#imp-file').addEventListener('change', (e) => { pick(e.target.files[0]); e.target.value = ''; });
+  ['dragenter', 'dragover'].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove('over'); }));
+  drop.addEventListener('drop', (e) => pick(e.dataTransfer.files[0]));
 }
 
 router();

@@ -47,6 +47,15 @@ const upload = multer({
     else cb(new UserError(`"${file.originalname}" is not a supported file. Upload a JPG, PNG or PDF.`));
   },
 });
+// Excel files for the import page: .xlsx only (the older .xls format cannot be read safely).
+const importUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_FILE_MB * 1024 * 1024, files: 1 },
+  fileFilter: (req, file, cb) => {
+    if (/\.xlsx$/i.test(file.originalname)) cb(null, true);
+    else cb(new UserError(`"${file.originalname}" is not an .xlsx workbook. In Excel, use File > Save As > Excel Workbook (.xlsx).`));
+  },
+});
 const entryFiles = upload.fields([{ name: 'bill', maxCount: 1 }, { name: 'photos', maxCount: 10 }]);
 const tripPhotos = upload.array('photos', 3);
 
@@ -228,6 +237,18 @@ app.get('/api/buses/:busNo', wrap((req) => req.service.getBus(req.params.busNo))
 app.get('/api/repeats', wrap((req) => req.service.getRepeats()));
 app.get('/api/reports/daily', wrap((req) => req.service.getDailyReport(String(req.query.start_date || ''), String(req.query.end_date || req.query.start_date || ''), String(req.query.bus_no || ''))));
 app.post('/api/reports/daily', tripPhotos, wrap((req) => req.service.saveDailyReport(JSON.parse(req.body.report || '{}'), req.files || [])));
+app.get('/api/import/template', async (req, res, next) => {
+  try {
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': 'attachment; filename="Bus Logbook import template.xlsx"',
+    });
+    res.send(await req.service.importTemplate());
+  } catch (err) {
+    next(err);
+  }
+});
+app.post('/api/import', importUpload.single('file'), wrap((req) => req.service.importWorkbook(req.file, { commit: req.body.commit === '1' })));
 app.get('/api/entries/:id', wrap((req) => req.service.getEntry(req.params.id)));
 app.post('/api/check-repeat', wrap((req) => req.service.checkRepeat(req.body)));
 app.post('/api/bills/read', upload.single('bill'), wrap((req) => req.service.readBillFields(req.file)));

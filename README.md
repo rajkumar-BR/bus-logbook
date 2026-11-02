@@ -175,7 +175,11 @@ npm start
 
 Other `scripts/admin.js` commands: `list`, `set-password <email>`, `disable-user <email>`, `enable-user <email>`.
 
-**Bringing in a school's existing Excel records**
+**Bringing in records from Excel**
+
+Open **Import** in the app, drop in an .xlsx file and check the preview. Nothing is saved until you press the import button. The page reads sheets by their headings (Date, Bus No, Work Done, Garage, Amount and similar), skips title rows above the headings, reads dates day first (18/10/2026), and lists any row it cannot use with its Excel row number. Importing the same file again adds nothing. If a school's sheet looks very different, the page has a template to copy records into. It imports buses, service visits, parts changed, bus documents and workshops.
+
+**Copying a whole app workbook with the script**
 
 ```bash
 node --env-file=.env scripts/import-xlsx.js school-001 ./data

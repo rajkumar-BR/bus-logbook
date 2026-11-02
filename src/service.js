@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { KINDS, STATUS, DEFAULT_LISTS } from './schema.js';
 import * as L from './logic.js';
+import * as I from './importer.js';
 import { UserError } from './ai.js';
 
 export function localToday() {
@@ -540,5 +541,45 @@ export function createService(storage, { readBill = null, today = localToday, us
     return d.buses.map((b) => ({ ...b, route: currentRoute(d, b.bus_no) }));
   }
 
-  return { getLists, getFleet, getBus, getEntry, getRepeats, getDailyReport, saveDailyReport, checkRepeat, readBillFields, saveEntry, addBus, listBuses };
+  // ---------- import from Excel
+
+  const IMPORT_READS = ['Buses', 'Entries', 'Parts changed', 'Bus documents', 'Workshops', 'Route assignments', 'Lists'];
+
+  function planFrom(parsed, existing) {
+    const lists = { ...DEFAULT_LISTS, ...L.listsFrom(existing.Lists) };
+    return I.planImport(parsed, existing, { today: today(), now: localNow(), user, kinds: lists.entry_kinds, systems: lists.systems });
+  }
+
+  // Without commit it only reports what would happen. With commit it saves the rows that passed.
+  async function importWorkbook(file, { commit = false } = {}) {
+    if (!file) throw new UserError('Choose an Excel file (.xlsx) to import.');
+    const parsed = await I.parseWorkbook(file.buffer);
+    const report = (plan, committed) => ({ committed, file: file.originalname, tabs: plan.tabs, notes: plan.notes, ignoredSheets: plan.ignoredSheets, totals: plan.totals });
+
+    if (!commit) {
+      const existing = {};
+      for (const tab of IMPORT_READS) existing[tab] = await storage.read(tab);
+      return report(planFrom(parsed, existing), false);
+    }
+    return storage.transact((tx) => {
+      const existing = Object.fromEntries(IMPORT_READS.map((tab) => [tab, tx.read(tab)]));
+      const plan = planFrom(parsed, existing);
+      for (const [tab, rows] of Object.entries(plan.append)) if (rows.length) tx.append(tab, rows);
+      if (plan.inWorkshop.length) {
+        tx.update('Buses', (b) => plan.inWorkshop.includes(b.bus_no) && b.status !== STATUS.IN_WORKSHOP, { status: STATUS.IN_WORKSHOP });
+      }
+      if (plan.totals.add) {
+        const counts = Object.entries(plan.append).filter(([, rows]) => rows.length).map(([tab, rows]) => `${rows.length} ${tab.toLowerCase()}`).join(', ');
+        tx.append('Change log', [{ timestamp: localNow(), user, action: 'Imported', tab: 'Import', record_id: '', field: '', old_value: '', new_value: `${file.originalname}: ${counts}` }]);
+      }
+      return report(plan, true);
+    });
+  }
+
+  async function importTemplate() {
+    const lists = await getLists();
+    return I.buildTemplate({ kinds: lists.entry_kinds, systems: lists.systems });
+  }
+
+  return { getLists, getFleet, getBus, getEntry, getRepeats, getDailyReport, saveDailyReport, checkRepeat, readBillFields, saveEntry, addBus, listBuses, importWorkbook, importTemplate };
 }

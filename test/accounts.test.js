@@ -171,3 +171,34 @@ test('uploaded files are kept under the school\'s own folder', opts, async () =>
     assert.throws(() => storage.forSchool('../etc'), /not a valid school id/);
   } finally { await storage.drop(); }
 });
+
+test('an Excel import lands in the importing school only, and importing twice adds nothing', opts, async () => {
+  const { storage, accounts } = await setup();
+  try {
+    const a = await accounts.createSchool({ name: 'School A' });
+    const b = await accounts.createSchool({ name: 'School B' });
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Entries');
+    ws.addRow(['Bus No', 'Date', 'Amount', 'Garage']);
+    ws.addRow(['04', '28/10/2026', 5000, 'Sri Murugan Motors']);
+    ws.addRow(['04', '12/09/2026', 3000, 'Sri Murugan Motors']);
+    const file = { originalname: 'old.xlsx', buffer: Buffer.from(await wb.xlsx.writeBuffer()) };
+
+    const sa = createService(storage.forSchool(a), { today: () => '2026-11-03', user: 'a@a.test' });
+    const first = await sa.importWorkbook(file, { commit: true });
+    assert.equal(first.totals.errors, 0);
+    assert.equal((await storage.forSchool(a).read('Entries')).length, 2);
+    assert.equal((await storage.forSchool(a).read('Buses'))[0].status, 'In workshop');
+    assert.equal((await storage.forSchool(b).read('Entries')).length, 0);
+    assert.equal((await storage.forSchool(b).read('Buses')).length, 0);
+
+    const again = await sa.importWorkbook(file, { commit: true });
+    assert.equal(again.totals.add, 0);
+    assert.equal((await storage.forSchool(a).read('Entries')).length, 2);
+
+    // the other school can import the same file; its records are its own
+    const sb = createService(storage.forSchool(b), { today: () => '2026-11-03', user: 'b@b.test' });
+    assert.equal((await sb.importWorkbook(file, { commit: true })).totals.add > 0, true);
+    assert.equal((await storage.forSchool(b).read('Entries')).length, 2);
+  } finally { await storage.drop(); }
+});
