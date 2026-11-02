@@ -3,6 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import ExcelJS from 'exceljs';
 import path from 'node:path';
 import { createAccounts, hashPassword, verifyPassword } from '../src/accounts.js';
 import { createService } from '../src/service.js';
