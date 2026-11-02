@@ -33,7 +33,14 @@ export const tableName = (tab) => tab.toLowerCase().replace(/[^a-z0-9]+/g, '_');
 export function createPostgresStorage(env = process.env) {
   if (!env.DATABASE_URL) throw new Error('STORAGE=postgres needs DATABASE_URL, for example postgres://user:password@localhost:5432/buslog');
   const schema = env.DB_SCHEMA || 'public';
-  const pool = new pg.Pool({ connectionString: env.DATABASE_URL, options: `-c search_path=${schema}` });
+  // Hosted databases need SSL (DATABASE_SSL=require). Their certificates are signed by the provider's own authority, so the
+  // certificate is not verified. The search_path option is only sent for a non-default schema (tests), because connection
+  // poolers such as Supabase's refuse unknown startup options.
+  const pool = new pg.Pool({
+    connectionString: env.DATABASE_URL,
+    ssl: String(env.DATABASE_SSL || '').toLowerCase() === 'require' ? { rejectUnauthorized: false } : undefined,
+    options: schema === 'public' ? undefined : `-c search_path=${schema}`,
+  });
   const files = createFiles(env); // bills and photos
 
   const table = (tab) => `${ident(schema)}.${ident(tableName(tab))}`;

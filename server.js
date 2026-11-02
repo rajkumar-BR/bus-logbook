@@ -179,6 +179,16 @@ function signupsBlocked(ip) {
 }
 const digest = (v) => crypto.createHash('sha256').update(String(v)).digest();
 
+// For the host's health check: answers only when the database does.
+app.get('/healthz', async (req, res) => {
+  try {
+    if (multi) await storage.pool.query('SELECT 1');
+    res.json({ ok: true });
+  } catch {
+    res.status(503).json({ ok: false });
+  }
+});
+
 // What the login and signup pages may show. Nothing secret.
 app.get('/api/public-config', (req, res) => {
   res.json({ signup: SIGNUP_ENABLED, needsCode: SIGNUP_ENABLED && Boolean(SIGNUP_CODE), google: googleOAuthEnabled && !multi });
@@ -253,7 +263,7 @@ const WAITING_PATHS = ['/pending.html', '/pending.js', '/api/account'];
 
 app.use(async (req, res, next) => {
   try {
-    const publicPaths = ['/login.html', '/login.js', '/signup.html', '/signup.js', '/api/login', '/api/logout', '/api/signup', '/api/public-config'];
+    const publicPaths = ['/healthz', '/login.html', '/login.js', '/signup.html', '/signup.js', '/api/login', '/api/logout', '/api/signup', '/api/public-config'];
     if (publicPaths.includes(req.path)) return next();
     req.user = await currentUser(req);
     if (!req.user) {

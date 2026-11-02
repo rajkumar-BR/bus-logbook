@@ -1,0 +1,46 @@
+# Render blueprint for Bus Logbook. The database and file bucket live elsewhere (Supabase),
+# so this service keeps no data of its own and needs no disk. See DEPLOY.md.
+services:
+  - type: web
+    name: bus-logbook
+    runtime: node
+    plan: free            # free sleeps after 15 minutes idle; change to starter for real use
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: HOST
+        value: 0.0.0.0
+      - key: STORAGE
+        value: postgres
+      - key: FILES
+        value: s3
+      - key: DATABASE_SSL
+        value: require
+      - key: ALLOW_SIGNUP
+        value: "true"
+      # Secrets and per-deployment values: Render asks for these when you create the service.
+      - key: DATABASE_URL
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_REGION
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: SIGNUP_CODE
+        sync: false
+      - key: PAYMENT_URL
+        sync: false
+      - key: PAYMENT_NOTE
+        sync: false
+      - key: SUPPORT_EMAIL
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false

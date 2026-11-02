@@ -117,6 +117,10 @@ The workbook has tabs such as:
 
 The app expects the workbook to be closed in Excel before entering records in the web app, or the files may overwrite each other.
 
+## Deploying
+
+For many organisations on Postgres, with files in a bucket and the app on Render, follow [DEPLOY.md](DEPLOY.md). The sections below describe the older single-school modes.
+
 ## Cloud and Google Drive deployment
 
 This app is a Node + Express service and is designed for a persistent server environment, not a purely static host.
