@@ -35,8 +35,7 @@ The app server keeps no data of its own: records are in Postgres and bills and p
 Run these on your own computer, pointed at the production database. The password is asked for, not typed on the command line.
 
 ```bash
-export DATABASE_URL='<the same Supabase URL>' DATABASE_SSL=require FILES=s3 \
-  S3_BUCKET=... S3_ENDPOINT=... S3_REGION=... S3_ACCESS_KEY_ID=... S3_SECRET_ACCESS_KEY=...
+export DATABASE_URL='<the same Supabase session pooler URL>' DATABASE_SSL=require
 node scripts/admin.js create-org "Little Flower School"
 node scripts/admin.js create-user school-001 you@yourschool.org
 node scripts/admin.js list
