@@ -1,13 +1,13 @@
-// Bus Logbook: local web server.
-// Serves the screens in public/ and a small JSON API on top of the storage folder.
+// Bus Logbook web server.
+// Serves the screens in public/ and a JSON API. Data is in Postgres, files are in a folder or an S3 bucket,
+// and every request runs as a signed-in user of one organisation.
 
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import multer from 'multer';
-import { google } from 'googleapis';
-import { createStorage } from './src/storage/index.js';
+import { createPostgresStorage } from './src/storage/postgres.js';
 import { createService } from './src/service.js';
 import { createAccounts } from './src/accounts.js';
 import { contentTypeFor, isSafeLink } from './src/storage/files.js';
@@ -18,34 +18,20 @@ const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '127.0.0.1';
 const MAX_FILE_MB = 10;
 const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/heic', 'application/pdf'];
-const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'admin@school.local').trim();
-const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD || 'change-this-password').trim();
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
-const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
-const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/auth/google/callback';
-const GOOGLE_DRIVE_FOLDER_NAME = process.env.GOOGLE_DRIVE_FOLDER_NAME || 'Transportation';
 const SESSION_COOKIE = 'buslogbook_session';
-const sessions = new Map();
-const googleOAuthEnabled = Boolean(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET);
-const googleOAuthClient = googleOAuthEnabled ? new google.auth.OAuth2(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI) : null;
 
-// `npm run demo` passes --demo to use the sample data folder instead of the real one.
-const storage = createStorage(process.argv.includes('--demo') ? { ...process.env, DATA_DIR: './demo-data' } : process.env);
+const storage = createPostgresStorage(process.env);
 await storage.init();
-// Postgres storage serves many schools: users and sessions live in the database and each request
-// gets a service limited to the signed-in user's school. Other storage keeps the single admin login.
-const multi = typeof storage.forSchool === 'function';
-const accounts = multi ? createAccounts(storage) : null;
-// New schools can sign themselves up (Postgres mode). Set SIGNUP_CODE to require a code, or ALLOW_SIGNUP=false to close signup.
-const SIGNUP_ENABLED = multi && String(process.env.ALLOW_SIGNUP ?? 'true').toLowerCase() !== 'false';
+const accounts = createAccounts(storage);
+await accounts.init();
+// New organisations can sign themselves up. Set SIGNUP_CODE to require a code, or ALLOW_SIGNUP=false to close signup.
+const SIGNUP_ENABLED = String(process.env.ALLOW_SIGNUP ?? 'true').toLowerCase() !== 'false';
 const SIGNUP_CODE = (process.env.SIGNUP_CODE || '').trim();
 // New organisations wait for payment and approval. These are shown to them while they wait.
 const PAYMENT_URL = /^https:\/\//.test(process.env.PAYMENT_URL || '') ? process.env.PAYMENT_URL.trim() : '';
 const PAYMENT_NOTE = (process.env.PAYMENT_NOTE || '').trim();
 const SUPPORT_EMAIL = (process.env.SUPPORT_EMAIL || '').trim();
-if (accounts) await accounts.init();
 const readBill = createBillReader(process.env.ANTHROPIC_API_KEY);
-const service = multi ? null : createService(storage, { readBill });
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -79,8 +65,7 @@ function getSessionToken(req) {
 
 async function currentUser(req) {
   const token = getSessionToken(req);
-  if (!token) return null;
-  return multi ? accounts.getSession(token) : (sessions.get(token) || null);
+  return token ? accounts.getSession(token) : null;
 }
 
 function sessionCookie(req, token, maxAge) {
@@ -101,75 +86,6 @@ function loginFailed(key) {
   failedLogins.set(key, { ...f, count: f.count + 1 });
 }
 
-function requireAdmin(req, res, next) {
-  if (!req.user) {
-    return res.status(401).json({ error: 'Please log in.' });
-  }
-  next();
-}
-
-app.get('/auth/google', (req, res) => {
-  if (!googleOAuthClient || multi) {
-    return res.status(503).json({ error: 'Google OAuth is not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in your .env file.' });
-  }
-  const scopes = [
-    'https://www.googleapis.com/auth/userinfo.email',
-    'https://www.googleapis.com/auth/drive.readonly',
-  ];
-  return res.redirect(googleOAuthClient.generateAuthUrl({
-    access_type: 'offline',
-    prompt: 'consent',
-    include_granted_scopes: true,
-    scope: scopes,
-  }));
-});
-
-app.get('/auth/google/callback', async (req, res) => {
-  if (!googleOAuthClient || multi) {
-    return res.status(503).send('Google OAuth is not configured.');
-  }
-  const code = String(req.query.code || '');
-  if (!code) return res.status(400).send('Missing Google OAuth code.');
-
-  try {
-    const { tokens } = await googleOAuthClient.getToken(code);
-    googleOAuthClient.setCredentials(tokens);
-    const oauth2 = google.oauth2({ version: 'v2', auth: googleOAuthClient });
-    const info = await oauth2.userinfo.get();
-    const email = String(info.data.email || '').trim();
-
-    let folderId = null;
-    if (tokens.access_token) {
-      const drive = google.drive({ version: 'v3', auth: googleOAuthClient });
-      const folders = await drive.files.list({
-        q: "mimeType = 'application/vnd.google-apps.folder' and trashed = false",
-        fields: 'files(id,name,webViewLink)',
-        pageSize: 1000,
-      });
-      const folder = (folders.data.files || []).find((f) => String(f.name || '').trim() === GOOGLE_DRIVE_FOLDER_NAME);
-      folderId = folder?.id || null;
-    }
-
-    const token = crypto.randomBytes(24).toString('hex');
-    sessions.set(token, {
-      email,
-      provider: 'google',
-      folderId,
-      folderName: GOOGLE_DRIVE_FOLDER_NAME,
-      at: Date.now(),
-    });
-
-    res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`);
-    if (folderId) {
-      process.env.GOOGLE_DRIVE_FOLDER_ID = folderId;
-    }
-    return res.redirect('/');
-  } catch (err) {
-    console.error('Google OAuth callback failed:', err);
-    return res.status(500).send('Google sign-in failed. Check the OAuth configuration and Google Drive folder access.');
-  }
-});
-
 const SIGNUPS_PER_HOUR = 5;
 const signups = new Map(); // ip -> times of recent signups
 function signupsBlocked(ip) {
@@ -182,7 +98,7 @@ const digest = (v) => crypto.createHash('sha256').update(String(v)).digest();
 // For the host's health check: answers only when the database does.
 app.get('/healthz', async (req, res) => {
   try {
-    if (multi) await storage.pool.query('SELECT 1');
+    await storage.pool.query('SELECT 1');
     res.json({ ok: true });
   } catch {
     res.status(503).json({ ok: false });
@@ -191,7 +107,7 @@ app.get('/healthz', async (req, res) => {
 
 // What the login and signup pages may show. Nothing secret.
 app.get('/api/public-config', (req, res) => {
-  res.json({ signup: SIGNUP_ENABLED, needsCode: SIGNUP_ENABLED && Boolean(SIGNUP_CODE), google: googleOAuthEnabled && !multi });
+  res.json({ signup: SIGNUP_ENABLED, needsCode: SIGNUP_ENABLED && Boolean(SIGNUP_CODE) });
 });
 
 app.post('/api/signup', async (req, res, next) => {
@@ -220,26 +136,17 @@ app.post('/api/login', async (req, res, next) => {
   try {
     const email = String(req.body?.email || '').trim().toLowerCase();
     const password = String(req.body?.password || '');
-    if (multi) {
-      const key = `${req.ip}|${email}`;
-      if (loginBlocked(key)) return res.status(429).json({ error: 'Too many failed attempts. Try again in 15 minutes.' });
-      const user = await accounts.login(email, password);
-      if (!user) {
-        loginFailed(key);
-        return res.status(401).json({ error: 'Wrong email or password.' });
-      }
-      failedLogins.delete(key);
-      const token = await accounts.createSession(user.user_id);
-      res.setHeader('Set-Cookie', sessionCookie(req, token, 86400));
-      return res.json({ ok: true, email: user.email });
+    const key = `${req.ip}|${email}`;
+    if (loginBlocked(key)) return res.status(429).json({ error: 'Too many failed attempts. Try again in 15 minutes.' });
+    const user = await accounts.login(email, password);
+    if (!user) {
+      loginFailed(key);
+      return res.status(401).json({ error: 'Wrong email or password.' });
     }
-    if (email !== ADMIN_EMAIL.toLowerCase() || password !== ADMIN_PASSWORD) {
-      return res.status(401).json({ error: 'Invalid school admin credentials.' });
-    }
-    const token = crypto.randomBytes(24).toString('hex');
-    sessions.set(token, { email, provider: 'admin', at: Date.now() });
+    failedLogins.delete(key);
+    const token = await accounts.createSession(user.user_id);
     res.setHeader('Set-Cookie', sessionCookie(req, token, 86400));
-    return res.json({ ok: true, email });
+    return res.json({ ok: true, email: user.email });
   } catch (err) {
     return next(err);
   }
@@ -247,11 +154,7 @@ app.post('/api/login', async (req, res, next) => {
 
 app.post('/api/logout', async (req, res, next) => {
   try {
-    const token = getSessionToken(req);
-    if (token) {
-      if (multi) await accounts.deleteSession(token);
-      else sessions.delete(token);
-    }
+    await accounts.deleteSession(getSessionToken(req));
     res.setHeader('Set-Cookie', sessionCookie(req, '', 0));
     res.json({ ok: true });
   } catch (err) {
@@ -270,23 +173,20 @@ app.use(async (req, res, next) => {
       if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Please log in.' });
       return res.redirect('/login.html');
     }
-    if (multi) {
-      // Organisations that have not been approved yet (or were suspended) can sign in, but only see their status.
-      if (req.user.org_status !== 'approved') {
-        if (WAITING_PATHS.includes(req.path)) return next();
-        if (req.path.startsWith('/api/')) {
-          const message = req.user.org_status === 'suspended'
-            ? 'This account is suspended. Please contact support.'
-            : 'Your account is waiting for payment and approval.';
-          return res.status(403).json({ error: message, code: req.user.org_status });
-        }
-        return res.redirect('/pending.html');
+    // Organisations that have not been approved yet (or were suspended) can sign in, but only see their status.
+    if (req.user.org_status !== 'approved') {
+      if (WAITING_PATHS.includes(req.path)) return next();
+      if (req.path.startsWith('/api/')) {
+        const message = req.user.org_status === 'suspended'
+          ? 'This account is suspended. Please contact support.'
+          : 'Your account is waiting for payment and approval.';
+        return res.status(403).json({ error: message, code: req.user.org_status });
       }
-      if (req.path === '/pending.html') return res.redirect('/');
+      return res.redirect('/pending.html');
     }
-    req.service = multi
-      ? createService(storage.forSchool(req.user.school_id), { readBill, user: req.user.email })
-      : service;
+    if (req.path === '/pending.html') return res.redirect('/');
+    // every request gets a service that can only see its own organisation's data
+    req.service = createService(storage.forSchool(req.user.school_id), { readBill, user: req.user.email });
     return next();
   } catch (err) {
     return next(err);
@@ -300,11 +200,11 @@ const entryFromForm = (req) => {
 const filesFrom = (req) => ({ bill: req.files?.bill?.[0], photos: req.files?.photos || [] });
 
 app.get('/api/account', wrap(async (req) => {
-  const [org] = multi ? await storage.forSchool(req.user.school_id).read('Schools') : [];
+  const [org] = await storage.forSchool(req.user.school_id).read('Schools');
   return {
     email: req.user.email,
     organisation: org?.school_name || '',
-    status: multi ? req.user.org_status : 'approved',
+    status: req.user.org_status,
     paymentUrl: PAYMENT_URL,
     paymentNote: PAYMENT_NOTE,
     supportEmail: SUPPORT_EMAIL,
@@ -313,9 +213,9 @@ app.get('/api/account', wrap(async (req) => {
 app.get('/api/lists', wrap((req) => req.service.getLists()));
 app.get('/api/fleet', wrap((req) => req.service.getFleet()));
 app.get('/api/buses', wrap((req) => req.service.listBuses()));
-app.post('/api/buses', requireAdmin, wrap((req) => req.service.addBus(req.body)));
+app.post('/api/buses', wrap((req) => req.service.addBus(req.body)));
 app.get('/api/buses/:busNo', wrap((req) => req.service.getBus(req.params.busNo)));
-app.put('/api/buses/:busNo', requireAdmin, wrap((req) => req.service.updateBus(req.params.busNo, req.body || {})));
+app.put('/api/buses/:busNo', wrap((req) => req.service.updateBus(req.params.busNo, req.body || {})));
 app.get('/api/changelog', wrap((req) => req.service.getChangeLog({ action: String(req.query.action || ''), q: String(req.query.q || ''), page: Number(req.query.page) || 1 })));
 app.get('/api/repeats', wrap((req) => req.service.getRepeats()));
 app.get('/api/reports/daily', wrap((req) => req.service.getDailyReport(String(req.query.start_date || ''), String(req.query.end_date || req.query.start_date || ''), String(req.query.bus_no || ''))));
@@ -339,42 +239,33 @@ app.post('/api/entries', entryFiles, wrap((req) => req.service.saveEntry(entryFr
 app.post('/api/entries/:id/void', wrap((req) => req.service.voidEntry(req.params.id, req.body?.reason)));
 app.post('/api/entries/:id/correct', entryFiles, wrap((req) => req.service.saveEntry(entryFromForm(req), filesFrom(req), { correctsId: req.params.id })));
 
-if (multi) {
-  // Each organisation's files live under schools/<its id>/ and only its users can open them.
-  // Files saved before organisations existed sit in un-prefixed folders and belong to LEGACY_SCHOOL_ID, if set.
-  const mayOpen = (user, link) => {
-    const owner = /^schools\/([a-z0-9-]+)\//.exec(link);
-    if (owner) return owner[1] === user.school_id;
-    return /^(Bills|Photos|Bus documents)\//.test(link) && user.school_id === process.env.LEGACY_SCHOOL_ID;
-  };
-  app.get(/^\/files\/(.+)$/, async (req, res, next) => {
-    try {
-      const link = req.params[0];
-      if (!isSafeLink(link)) return res.status(404).send('File not found.');
-      if (!mayOpen(req.user, link)) return res.status(403).send('Not available.');
-      const file = await storage.files.read(link);
-      if (!file) return res.status(404).send('File not found.');
-      // Only known image and PDF types are shown in the browser; anything else downloads.
-      const type = contentTypeFor(link);
-      res.set({
-        'Content-Type': type || 'application/octet-stream',
-        'Content-Disposition': type ? 'inline' : 'attachment',
-        'X-Content-Type-Options': 'nosniff',
-        'Cache-Control': 'private, max-age=300',
-        ...(file.size ? { 'Content-Length': String(file.size) } : {}),
-      });
-      file.stream.on('error', next);
-      return file.stream.pipe(res);
-    } catch (err) {
-      return next(err);
-    }
-  });
-} else {
-  // Uploaded bills, photos and documents (only these folders are served).
-  for (const folder of ['Bills', 'Photos', 'Bus documents']) {
-    app.use(`/files/${encodeURIComponent(folder)}`, express.static(path.join(storage.root, folder), { dotfiles: 'deny', index: false }));
+// Each organisation's files live under schools/<its id>/ and only its users can open them.
+const mayOpen = (user, link) => {
+  const owner = /^schools\/([a-z0-9-]+)\//.exec(link);
+  return Boolean(owner) && owner[1] === user.school_id;
+};
+app.get(/^\/files\/(.+)$/, async (req, res, next) => {
+  try {
+    const link = req.params[0];
+    if (!isSafeLink(link)) return res.status(404).send('File not found.');
+    if (!mayOpen(req.user, link)) return res.status(403).send('Not available.');
+    const file = await storage.files.read(link);
+    if (!file) return res.status(404).send('File not found.');
+    // Only known image and PDF types are shown in the browser; anything else downloads.
+    const type = contentTypeFor(link);
+    res.set({
+      'Content-Type': type || 'application/octet-stream',
+      'Content-Disposition': type ? 'inline' : 'attachment',
+      'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': 'private, max-age=300',
+      ...(file.size ? { 'Content-Length': String(file.size) } : {}),
+    });
+    file.stream.on('error', next);
+    return file.stream.pipe(res);
+  } catch (err) {
+    return next(err);
   }
-}
+});
 app.use(express.static(path.join(here, 'public')));
 
 app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
@@ -392,11 +283,11 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
 });
 
 app.listen(PORT, HOST, () => {
+  const files = storage.files.kind === 's3' ? `S3 bucket ${storage.files.bucket}` : `folder ${storage.files.root}`;
   console.log(`\n  Bus Logbook is running:  http://localhost:${PORT}`);
-  console.log(`  Storage backend:         ${storage.kind || 'local'}`);
-  console.log(`  ${multi ? 'Files' : 'Data folder'}:${' '.repeat(multi ? 20 : 13)}${storage.files?.kind === 's3' ? `S3 bucket ${storage.files.bucket}` : storage.root || 'Google Drive folder'}`);
-  console.log(multi ? '  Sign-in:                 school users from the database (see scripts/admin.js)' : `  Admin login:             ${ADMIN_EMAIL} / ${ADMIN_PASSWORD}`);
-  console.log(`  Google OAuth:           ${googleOAuthEnabled ? 'enabled' : 'disabled'}`);
+  console.log('  Database:                Postgres');
+  console.log(`  Files:                   ${files}`);
+  console.log(`  Signup:                  ${!SIGNUP_ENABLED ? 'closed' : SIGNUP_CODE ? 'needs a signup code' : 'open to anyone'}`);
   console.log(`  AI bill reading:         ${process.env.ANTHROPIC_API_KEY ? 'on' : 'off (add ANTHROPIC_API_KEY to .env)'}`);
-  console.log('\n  Keep this window open while using the app. Press Ctrl+C to stop.\n');
+  console.log('\n  Press Ctrl+C to stop.\n');
 });

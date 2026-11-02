@@ -8,7 +8,6 @@
 //   set-password <email>                                  asks for the new password; signs the user out everywhere
 //   disable-user <email> | enable-user <email>
 //   list                                                  organisations (waiting ones first) and users
-//   assign-legacy <org-id>                                give rows that have no organisation (Phase 1 data) to this one
 
 import readline from 'node:readline';
 import { createPostgresStorage } from '../src/storage/postgres.js';
@@ -23,7 +22,7 @@ for (let i = 0; i < rest.length; i++) {
 }
 
 const usage = () => {
-  console.error('Commands: create-org, create-user, approve, suspend, set-password, disable-user, enable-user, list, assign-legacy.\nSee the top of scripts/admin.js.');
+  console.error('Commands: create-org, create-user, approve, suspend, set-password, disable-user, enable-user, list.\nSee the top of scripts/admin.js.');
   process.exit(1);
 };
 
@@ -90,11 +89,6 @@ try {
       console.log(`${s.school_id}  ${s.school_name}${s.created_at ? `  [signed up ${s.created_at}]` : ''}${tag}`);
       for (const u of users.filter((x) => x.school_id === s.school_id)) console.log(`    ${u.email}${u.active ? '' : '  (disabled)'}`);
     }
-  } else if (command === 'assign-legacy') {
-    if (!positional[0]) usage();
-    const moved = await accounts.assignLegacyData(positional[0]);
-    console.log(Object.keys(moved).length ? moved : 'No rows without an organisation were found.');
-    console.log(`Files saved before schools existed are served only to ${positional[0]} when LEGACY_SCHOOL_ID=${positional[0]} is set.`);
   } else {
     usage();
   }

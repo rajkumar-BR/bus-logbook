@@ -14,7 +14,6 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand, HeadBucketCommand } from '@aws-sdk/client-s3';
-import { clean } from './local-xlsx.js';
 
 const FOLDERS = ['Bills', 'Photos', 'Bus documents'];
 
@@ -23,6 +22,11 @@ const TYPES = {
   '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp',
   '.gif': 'image/gif', '.heic': 'image/heic', '.pdf': 'application/pdf',
 };
+// File and folder names: no path separators or characters that Windows and S3 dislike.
+export function clean(s) {
+  return String(s).replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
+}
+
 export const contentTypeFor = (link) => TYPES[path.extname(link).toLowerCase()] || null;
 
 export function fileUrl(link) {

@@ -13,8 +13,6 @@ services:
         value: 22
       - key: HOST
         value: 0.0.0.0
-      - key: STORAGE
-        value: postgres
       - key: FILES
         value: s3
       - key: DATABASE_SSL

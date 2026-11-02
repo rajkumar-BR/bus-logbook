@@ -1,7 +1,6 @@
-// The tabs and columns of "Bus Logbook Data".
-// This is the single source of truth for the spreadsheet layout. It matches the
-// architecture document (section 6), so the same workbook can later be imported
-// into Google Sheets unchanged.
+// The tables and columns of the logbook (each "tab" is one Postgres table).
+// This is the single source of truth for the data layout: the database tables, the
+// import template and the importer all come from it.
 //
 // Column types: text | number | date (YYYY-MM-DD) | datetime (YYYY-MM-DD HH:mm) | bool
 

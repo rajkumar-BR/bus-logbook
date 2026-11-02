@@ -1,13 +1,13 @@
-// Postgres storage: one table per tab in schema.js, same adapter interface as
-// local-xlsx.js (init, read, transact, saveFile, fileUrl), so service.js is unchanged.
+// Postgres storage: one table per tab in schema.js. The interface service.js uses is
+// read(tab), transact(tx.read / tx.append / tx.update), saveFile and fileUrl.
 //
 // Many schools share these tables. storage.forSchool(id) returns the same interface
 // limited to one school: reads only see that school's rows, appended rows are stamped
 // with its id, updates can only touch its rows, and uploaded files go under
 // schools/<id>/. The plain storage object (no school) sees every row; only scripts use it.
 //
-// Values come back exactly as the Excel adapter returns them: empty is '', dates
-// and datetimes are strings, numbers are numbers, bools are booleans.
+// Values come back in the shapes the app expects: empty is '', dates and datetimes
+// are strings, numbers are numbers, bools are booleans.
 //
 // service.js calls tx.read / tx.append / tx.update synchronously, so transact()
 // loads the school's tables into memory inside a database transaction, runs the
@@ -31,7 +31,7 @@ const ident = (name) => `"${String(name).replace(/"/g, '""')}"`;
 export const tableName = (tab) => tab.toLowerCase().replace(/[^a-z0-9]+/g, '_');
 
 export function createPostgresStorage(env = process.env) {
-  if (!env.DATABASE_URL) throw new Error('STORAGE=postgres needs DATABASE_URL, for example postgres://user:password@localhost:5432/buslog');
+  if (!env.DATABASE_URL) throw new Error('DATABASE_URL is not set. It looks like postgres://user:password@localhost:5432/buslog');
   const schema = env.DB_SCHEMA || 'public';
   // Hosted databases need SSL (DATABASE_SSL=require). Their certificates are signed by the provider's own authority, so the
   // certificate is not verified. The search_path option is only sent for a non-default schema (tests), because connection
@@ -183,14 +183,14 @@ async function updateRow(client, tab, row) {
   await client.query(`UPDATE ${ident(tableName(tab))} SET ${sets.join(', ')} WHERE _id = $${cols.length + 1}`, [...values, row[ROW_ID]]);
 }
 
-// database row -> app row ('' for empty, like the Excel adapter)
+// database row -> app row ('' for empty)
 function fromRow(tab, r) {
   const obj = {};
   for (const col of columnsOf(tab)) obj[col] = r[col] === null || r[col] === undefined ? '' : r[col];
   return obj;
 }
 
-// app row -> in-memory row, with the same cleaning the Excel adapter applies on write
+// app row -> in-memory row, cleaned the same way on every write
 function fromObject(tab, obj) {
   const out = {};
   for (const col of columnsOf(tab)) out[col] = normalise(tab, col, obj[col]);

@@ -144,23 +144,6 @@ test('tokens are stored hashed, never as given', opts, async () => {
   } finally { await storage.drop(); }
 });
 
-test('rows saved before schools existed can be given to a school', opts, async () => {
-  const { storage, accounts } = await setup();
-  try {
-    await storage.transact((tx) => {
-      tx.append('Buses', [{ bus_no: '01' }, { bus_no: '02' }]);
-      tx.append('Settings', [{ key: 'default_service_km', value: '12000' }]);
-    });
-    const a = await accounts.createSchool({ name: 'School A' });
-    const moved = await accounts.assignLegacyData(a);
-    assert.equal(moved.Buses, 2);
-    assert.equal((await storage.forSchool(a).read('Buses')).length, 2);
-    const settings = await storage.forSchool(a).read('Settings');
-    assert.deepEqual(settings.map((s) => s.value), ['12000']); // the old settings replaced the defaults
-    assert.equal((await storage.read('Buses')).filter((b) => !b.school_id).length, 0);
-  } finally { await storage.drop(); }
-});
-
 test('uploaded files are kept under the school\'s own folder', opts, async () => {
   const { storage, accounts } = await setup();
   try {

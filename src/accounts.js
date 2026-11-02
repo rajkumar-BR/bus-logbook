@@ -102,35 +102,6 @@ export function createAccounts(storage) {
     return rows;
   }
 
-  // Phase 1 data has no school id. This stamps it with one, so the first school can keep its history.
-  async function assignLegacyData(schoolId) {
-    if (!(await storage.forSchool(schoolId).read('Schools')).length) throw new UserError(`Organisation ${schoolId} does not exist. Create it first.`);
-    const moved = {};
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      for (const tab of Object.keys(TABS)) {
-        if (tab === 'Schools') continue;
-        const name = t(tableName(tab));
-        const blank = `(school_id IS NULL OR school_id = '')`;
-        // Lists and Settings: the old rows replace the defaults the new school was given.
-        if (tab === 'Lists' || tab === 'Settings') {
-          const { rows } = await client.query(`SELECT 1 FROM ${name} WHERE ${blank} LIMIT 1`);
-          if (rows.length) await client.query(`DELETE FROM ${name} WHERE school_id = $1`, [schoolId]);
-        }
-        const res = await client.query(`UPDATE ${name} SET school_id = $1 WHERE ${blank}`, [schoolId]);
-        if (res.rowCount) moved[tab] = res.rowCount;
-      }
-      await client.query('COMMIT');
-    } catch (err) {
-      await client.query('ROLLBACK').catch(() => {});
-      throw err;
-    } finally {
-      client.release();
-    }
-    return moved;
-  }
-
   async function removeSchool(schoolId) {
     for (const tab of Object.keys(TABS)) await pool.query(`DELETE FROM ${t(tableName(tab))} WHERE school_id = $1`, [schoolId]);
   }
@@ -251,7 +222,7 @@ export function createAccounts(storage) {
   }
 
   return {
-    init, createSchool, signUp, setStatus, listSchools, assignLegacyData,
+    init, createSchool, signUp, setStatus, listSchools,
     createUser, setPassword, setActive, listUsers, login,
     createSession, getSession, deleteSession,
   };
