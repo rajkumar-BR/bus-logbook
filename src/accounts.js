@@ -6,11 +6,13 @@ import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 import { DEFAULT_LISTS, DEFAULT_SETTINGS, TABS, columnsOf } from './schema.js';
 import { SCHOOL_ID_PATTERN, tableName } from './storage/postgres.js';
+import { UserError } from './ai.js';
 
 const scrypt = promisify(crypto.scrypt);
 const COST = { N: 2 ** 15, r: 8, p: 1 };
 const KEY_LENGTH = 64;
 const MIN_PASSWORD = 8;
+const MAX_PASSWORD = 200; // scrypt is slow on purpose, so very long input is refused
 export const SESSION_HOURS = 24;
 
 export async function hashPassword(password) {
@@ -31,8 +33,9 @@ const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
 const normaliseEmail = (email) => String(email || '').trim().toLowerCase();
 
 export function checkNewCredentials(email, password) {
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(normaliseEmail(email))) throw new Error('Enter a valid email address.');
-  if (String(password || '').length < MIN_PASSWORD) throw new Error(`The password must be at least ${MIN_PASSWORD} characters.`);
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(normaliseEmail(email))) throw new UserError('Enter a valid email address.');
+  if (String(password || '').length < MIN_PASSWORD) throw new UserError(`The password must be at least ${MIN_PASSWORD} characters.`);
+  if (String(password).length > MAX_PASSWORD) throw new UserError(`The password must be at most ${MAX_PASSWORD} characters.`);
 }
 
 export function createAccounts(storage) {
@@ -60,12 +63,13 @@ export function createAccounts(storage) {
   // ---------- schools
 
   async function createSchool({ name, shortName = '', region = '', id = null }) {
-    if (!String(name || '').trim()) throw new Error('The school needs a name.');
+    if (!String(name || '').trim()) throw new UserError('The school needs a name.');
     const schoolId = id || (await nextSchoolId());
-    if (!SCHOOL_ID_PATTERN.test(schoolId)) throw new Error('A school id uses lowercase letters, digits and dashes, e.g. school-001.');
+    if (!SCHOOL_ID_PATTERN.test(schoolId)) throw new UserError('A school id uses lowercase letters, digits and dashes, e.g. school-001.');
     const own = storage.forSchool(schoolId);
-    if ((await own.read('Schools')).length) throw new Error(`School ${schoolId} already exists.`);
+    if ((await own.read('Schools')).length) throw new UserError(`School ${schoolId} already exists.`);
     await own.transact((tx) => {
+      if (tx.read('Schools').length) throw new UserError(`School ${schoolId} already exists.`); // two creations at once
       tx.append('Schools', [{
         school_name: name.trim(), short_name: shortName, region, active: true,
         created_at: new Date().toISOString().slice(0, 16).replace('T', ' '),
@@ -95,7 +99,7 @@ export function createAccounts(storage) {
 
   // Phase 1 data has no school id. This stamps it with one, so the first school can keep its history.
   async function assignLegacyData(schoolId) {
-    if (!(await storage.forSchool(schoolId).read('Schools')).length) throw new Error(`School ${schoolId} does not exist. Create it first.`);
+    if (!(await storage.forSchool(schoolId).read('Schools')).length) throw new UserError(`School ${schoolId} does not exist. Create it first.`);
     const moved = {};
     const client = await pool.connect();
     try {
@@ -122,11 +126,34 @@ export function createAccounts(storage) {
     return moved;
   }
 
+  async function removeSchool(schoolId) {
+    for (const tab of Object.keys(TABS)) await pool.query(`DELETE FROM ${t(tableName(tab))} WHERE school_id = $1`, [schoolId]);
+  }
+
+  // Self-service signup: a school and its first user, created together. Returns the new user.
+  async function signUp({ schoolName, email, password }) {
+    const name = String(schoolName || '').trim().replace(/\s+/g, ' ');
+    if (name.length < 2 || name.length > 120) throw new UserError('Enter the school name (2 to 120 characters).');
+    checkNewCredentials(email, password);
+    const taken = await pool.query(`SELECT 1 FROM ${t('app_users')} WHERE lower(email) = $1`, [normaliseEmail(email)]);
+    if (taken.rows.length) throw new UserError('That email already has an account. Log in instead.', 409);
+
+    const schoolId = `school-${crypto.randomBytes(4).toString('hex')}`; // random, so ids do not reveal how many schools exist
+    await createSchool({ name, id: schoolId });
+    try {
+      const userId = await createUser({ schoolId, email, password });
+      return { user_id: userId, school_id: schoolId, email: normaliseEmail(email) };
+    } catch (err) {
+      await removeSchool(schoolId); // do not leave an empty school behind
+      throw err;
+    }
+  }
+
   // ---------- users
 
   async function createUser({ schoolId, email, password, name = '' }) {
     checkNewCredentials(email, password);
-    if (!(await storage.forSchool(schoolId).read('Schools')).length) throw new Error(`School ${schoolId} does not exist.`);
+    if (!(await storage.forSchool(schoolId).read('Schools')).length) throw new UserError(`School ${schoolId} does not exist.`);
     const hash = await hashPassword(password);
     try {
       const { rows } = await pool.query(
@@ -135,7 +162,7 @@ export function createAccounts(storage) {
       );
       return rows[0].user_id;
     } catch (err) {
-      if (err.code === '23505') throw new Error(`A user with the email ${normaliseEmail(email)} already exists.`);
+      if (err.code === '23505') throw new UserError(`A user with the email ${normaliseEmail(email)} already exists.`);
       throw err;
     }
   }
@@ -146,7 +173,7 @@ export function createAccounts(storage) {
       `UPDATE ${t('app_users')} SET password_hash = $2 WHERE lower(email) = $1 RETURNING user_id`,
       [normaliseEmail(email), await hashPassword(password)],
     );
-    if (!rows.length) throw new Error(`No user with the email ${normaliseEmail(email)}.`);
+    if (!rows.length) throw new UserError(`No user with the email ${normaliseEmail(email)}.`);
     await pool.query(`DELETE FROM ${t('app_sessions')} WHERE user_id = $1`, [rows[0].user_id]); // sign out everywhere
   }
 
@@ -155,7 +182,7 @@ export function createAccounts(storage) {
       `UPDATE ${t('app_users')} SET active = $2 WHERE lower(email) = $1 RETURNING user_id`,
       [normaliseEmail(email), active],
     );
-    if (!rows.length) throw new Error(`No user with the email ${normaliseEmail(email)}.`);
+    if (!rows.length) throw new UserError(`No user with the email ${normaliseEmail(email)}.`);
     if (!active) await pool.query(`DELETE FROM ${t('app_sessions')} WHERE user_id = $1`, [rows[0].user_id]);
   }
 
@@ -209,7 +236,7 @@ export function createAccounts(storage) {
   }
 
   return {
-    init, createSchool, listSchools, assignLegacyData,
+    init, createSchool, signUp, listSchools, assignLegacyData,
     createUser, setPassword, setActive, listUsers, login,
     createSession, getSession, deleteSession,
   };

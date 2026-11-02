@@ -159,6 +159,13 @@ With `STORAGE=postgres` the app keeps all data in Postgres and serves many schoo
 - Passwords are stored as scrypt hashes, sessions live in the database (they survive restarts, last 24 hours), and ten wrong tries in 15 minutes block that email from that address.
 - Bills and photos are saved under `schools/<school-id>/` and only that school's users can open them. They still live on the server's disk (`DATA_DIR`); object storage is planned.
 
+**Signup for new schools.** The login page links to `/signup.html`, where a school enters its name, an email (its username) and a password. That creates the school and its first user, signs them in, and gives them an empty logbook. Colleagues at the same school are added by you for now (`scripts/admin.js create-user`).
+
+- `SIGNUP_CODE=...` makes signup ask for a code, so only schools you have given the code to can join. Set it for any public deployment.
+- `ALLOW_SIGNUP=false` closes signup; you then create schools yourself with `scripts/admin.js`.
+- At most 5 signups an hour per address, and wrong codes are rate limited.
+- Emails are not verified yet, so anyone could register an address they don't own. A signup code is the protection until email verification is added.
+
 Set up:
 
 ```bash

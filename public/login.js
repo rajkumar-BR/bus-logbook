@@ -31,3 +31,9 @@ form.addEventListener('submit', async (event) => {
 googleLogin?.addEventListener('click', () => {
   window.location.href = '/auth/google';
 });
+
+// Show the Google button and the signup link only when this server offers them.
+fetch('/api/public-config').then((r) => r.json()).then((config) => {
+  if (googleLogin) googleLogin.hidden = !config.google;
+  document.getElementById('signupLine').hidden = !config.signup;
+}).catch(() => {});

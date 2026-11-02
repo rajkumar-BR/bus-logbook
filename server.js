@@ -35,6 +35,9 @@ await storage.init();
 // gets a service limited to the signed-in user's school. Other storage keeps the single admin login.
 const multi = typeof storage.forSchool === 'function';
 const accounts = multi ? createAccounts(storage) : null;
+// New schools can sign themselves up (Postgres mode). Set SIGNUP_CODE to require a code, or ALLOW_SIGNUP=false to close signup.
+const SIGNUP_ENABLED = multi && String(process.env.ALLOW_SIGNUP ?? 'true').toLowerCase() !== 'false';
+const SIGNUP_CODE = (process.env.SIGNUP_CODE || '').trim();
 if (accounts) await accounts.init();
 const readBill = createBillReader(process.env.ANTHROPIC_API_KEY);
 const service = multi ? null : createService(storage, { readBill });
@@ -162,6 +165,42 @@ app.get('/auth/google/callback', async (req, res) => {
   }
 });
 
+const SIGNUPS_PER_HOUR = 5;
+const signups = new Map(); // ip -> times of recent signups
+function signupsBlocked(ip) {
+  const recent = (signups.get(ip) || []).filter((at) => Date.now() - at < 3600000);
+  signups.set(ip, recent);
+  return recent.length >= SIGNUPS_PER_HOUR;
+}
+const digest = (v) => crypto.createHash('sha256').update(String(v)).digest();
+
+// What the login and signup pages may show. Nothing secret.
+app.get('/api/public-config', (req, res) => {
+  res.json({ signup: SIGNUP_ENABLED, needsCode: SIGNUP_ENABLED && Boolean(SIGNUP_CODE), google: googleOAuthEnabled && !multi });
+});
+
+app.post('/api/signup', async (req, res, next) => {
+  try {
+    if (!SIGNUP_ENABLED) return res.status(404).json({ error: 'Signup is not available here. Ask your administrator for an account.' });
+    if (SIGNUP_CODE) {
+      const key = `${req.ip}|signup-code`;
+      if (loginBlocked(key)) return res.status(429).json({ error: 'Too many wrong codes. Try again in 15 minutes.' });
+      if (!crypto.timingSafeEqual(digest(req.body?.code ?? ''), digest(SIGNUP_CODE))) {
+        loginFailed(key);
+        return res.status(403).json({ error: 'That signup code is not right. Ask the person who gave you this link.' });
+      }
+    }
+    if (signupsBlocked(req.ip)) return res.status(429).json({ error: 'Too many accounts were created from this connection. Try again in an hour.' });
+    const user = await accounts.signUp({ schoolName: req.body?.schoolName, email: req.body?.email, password: req.body?.password });
+    signups.get(req.ip).push(Date.now());
+    const token = await accounts.createSession(user.user_id);
+    res.setHeader('Set-Cookie', sessionCookie(req, token, 86400));
+    return res.status(201).json({ ok: true, email: user.email });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 app.post('/api/login', async (req, res, next) => {
   try {
     const email = String(req.body?.email || '').trim().toLowerCase();
@@ -207,7 +246,7 @@ app.post('/api/logout', async (req, res, next) => {
 
 app.use(async (req, res, next) => {
   try {
-    const publicPaths = ['/login.html', '/login.js', '/api/login', '/api/logout'];
+    const publicPaths = ['/login.html', '/login.js', '/signup.html', '/signup.js', '/api/login', '/api/logout', '/api/signup', '/api/public-config'];
     if (publicPaths.includes(req.path)) return next();
     req.user = await currentUser(req);
     if (!req.user) {
