@@ -289,3 +289,32 @@ test('approving and suspending change what an existing session sees, immediately
     assert.equal(list[0].status, 'suspended');
   } finally { await storage.drop(); }
 });
+
+test('removing an entry and editing a bus work in Postgres, and only within the organisation', opts, async () => {
+  const { storage, accounts } = await setup();
+  try {
+    const a = await accounts.createSchool({ name: 'School A' });
+    const b = await accounts.createSchool({ name: 'School B' });
+    const sa = createService(storage.forSchool(a), { today: () => '2026-11-03', user: 'a@a.test' });
+    const sb = createService(storage.forSchool(b), { today: () => '2026-11-03', user: 'b@b.test' });
+    await sa.addBus({ bus_no: '04', route_name: 'North Gate' });
+    await sb.addBus({ bus_no: '04' });
+    const visit = await sa.saveEntry({ bus_no: '04', kind: 'Repair', system: 'Brakes', date_in: '2026-10-20', date_out: '2026-10-20', total_cost: 500 });
+
+    await assert.rejects(sb.voidEntry(visit.entry_id, 'Not my entry at all'), /not found/);
+    await sa.voidEntry(visit.entry_id, 'Entered twice by mistake');
+    const row = (await storage.forSchool(a).read('Entries'))[0];
+    assert.deepEqual([row.record_status, row.voided_reason, row.voided_by, row.voided_at.length], ['Voided', 'Entered twice by mistake', 'a@a.test', 16]);
+    assert.equal((await sa.getBus('04')).voided.length, 1);
+
+    await sa.updateBus('04', { driver_name: 'Kumar', route_name: 'Hillside', active: false });
+    assert.equal((await storage.forSchool(a).read('Buses'))[0].driver_name, 'Kumar');
+    assert.equal((await storage.forSchool(a).read('Buses'))[0].active, false);
+    assert.equal((await storage.forSchool(b).read('Buses'))[0].driver_name, '');
+    assert.equal((await storage.forSchool(b).read('Buses'))[0].active, true);
+    // the route was set today, so changing it today repoints that assignment instead of adding one
+    const assignments = await storage.forSchool(a).read('Route assignments');
+    assert.deepEqual(assignments.map((r) => r.route_id), ['R02']);
+    assert.equal((await storage.forSchool(b).read('Route assignments')).length, 0);
+  } finally { await storage.drop(); }
+});

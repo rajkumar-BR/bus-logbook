@@ -315,6 +315,7 @@ app.get('/api/fleet', wrap((req) => req.service.getFleet()));
 app.get('/api/buses', wrap((req) => req.service.listBuses()));
 app.post('/api/buses', requireAdmin, wrap((req) => req.service.addBus(req.body)));
 app.get('/api/buses/:busNo', wrap((req) => req.service.getBus(req.params.busNo)));
+app.put('/api/buses/:busNo', requireAdmin, wrap((req) => req.service.updateBus(req.params.busNo, req.body || {})));
 app.get('/api/repeats', wrap((req) => req.service.getRepeats()));
 app.get('/api/reports/daily', wrap((req) => req.service.getDailyReport(String(req.query.start_date || ''), String(req.query.end_date || req.query.start_date || ''), String(req.query.bus_no || ''))));
 app.post('/api/reports/daily', tripPhotos, wrap((req) => req.service.saveDailyReport(JSON.parse(req.body.report || '{}'), req.files || [])));
@@ -334,6 +335,7 @@ app.get('/api/entries/:id', wrap((req) => req.service.getEntry(req.params.id)));
 app.post('/api/check-repeat', wrap((req) => req.service.checkRepeat(req.body)));
 app.post('/api/bills/read', upload.single('bill'), wrap((req) => req.service.readBillFields(req.file)));
 app.post('/api/entries', entryFiles, wrap((req) => req.service.saveEntry(entryFromForm(req), filesFrom(req))));
+app.post('/api/entries/:id/void', wrap((req) => req.service.voidEntry(req.params.id, req.body?.reason)));
 app.post('/api/entries/:id/correct', entryFiles, wrap((req) => req.service.saveEntry(entryFromForm(req), filesFrom(req), { correctsId: req.params.id })));
 
 if (multi) {

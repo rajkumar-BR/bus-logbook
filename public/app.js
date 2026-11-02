@@ -36,6 +36,7 @@ async function api(url, opts) {
   if (!res.ok) throw new Error(body.error || `Request failed (${res.status}).`);
   return body;
 }
+const putJSON = (url, data) => api(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
 const postJSON = (url, data) => api(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
 
 function toast(msg) {
@@ -54,8 +55,8 @@ async function getLists(force = false) {
 
 // ---------- router
 
-const views = { fleet: viewFleet, daily: viewDaily, bus: viewBus, repeats: viewRepeats, new: viewNew, correct: viewCorrect, buses: viewBuses, import: viewImport };
-const NAV_FOR = { fleet: '#fleet', daily: '#daily', bus: '#fleet', repeats: '#repeats', new: '#new', correct: '#new', buses: '#buses', import: '#import' };
+const views = { fleet: viewFleet, daily: viewDaily, bus: viewBus, repeats: viewRepeats, new: viewNew, correct: viewCorrect, buses: viewBuses, import: viewImport, editbus: viewEditBus };
+const NAV_FOR = { fleet: '#fleet', daily: '#daily', bus: '#fleet', repeats: '#repeats', new: '#new', correct: '#new', buses: '#buses', import: '#import', editbus: '#fleet' };
 
 async function router() {
   const [name, arg] = location.hash.slice(1).split('/');
@@ -288,6 +289,7 @@ function eventItem(e) {
     e.bill_url ? `<a href="${esc(e.bill_url)}" target="_blank" rel="noopener">View bill</a>` : '<span class="hint">No bill attached</span>',
     ...e.photo_urls.map((u, i) => `<a href="${esc(u)}" target="_blank" rel="noopener">Photo ${i + 1}</a>`),
     `<button type="button" data-go="#correct/${encodeURIComponent(e.entry_id)}">Correct this entry</button>`,
+    `<button type="button" class="danger" data-void="${esc(e.entry_id)}">Remove entry</button>`,
   ];
   return `<li class="ev" data-kind="${k}">
     <div class="when"><b>${dayMonth(e.date_in)}</b><span>${e.date_in.slice(0, 4)}</span></div>
@@ -338,8 +340,8 @@ async function viewBus(busNo) {
       <div class="bus-plate">${esc(b.bus_no)}</div>
       <div><h1>Bus ${esc(b.bus_no)}${b.route ? ` · ${esc(b.route)}` : ''}</h1>
         <p class="sub">${esc([b.make_model, b.year, b.seats ? `${b.seats} seats` : '', b.reg_no, b.driver_name ? `Driver ${b.driver_name}` : ''].filter(Boolean).join(' · '))}</p>
-        <div style="margin-top:6px">${pill(b.status)}</div></div>
-      <div class="head-actions"><a class="btn" href="#new/${encodeURIComponent(b.bus_no)}">Enter a bill for this bus</a></div>
+        <div style="margin-top:6px">${pill(b.status)}${b.active === false ? ' <span class="hint">Retired: not shown in the fleet</span>' : ''}</div></div>
+      <div class="head-actions"><a class="btn" href="#new/${encodeURIComponent(b.bus_no)}">Enter a bill for this bus</a> <a class="btn ghost" href="#editbus/${encodeURIComponent(b.bus_no)}">Edit bus</a></div>
     </div>
     <div class="facts">${facts.map(([k, v]) => `<div><div class="label">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join('')}</div>
     ${d.tyreHistory.length ? `<div class="panel report-panel"><div class="panel-h"><h2>Tyre replacement history</h2><span class="hint">Distance from each recorded fitment to its next recorded replacement</span></div><div class="tbl-wrap"><table><thead><tr><th>Tyre / position</th><th>Changed on</th><th>Odometer at change</th><th>Km survived</th><th>Replaced on</th></tr></thead><tbody>${d.tyreHistory.map((tyre) => `<tr><td>${esc(tyre.part_name)}${tyre.position ? `<div class="hint">${esc(tyre.position)}</div>` : ''}</td><td>${fullDate(tyre.date)}</td><td class="mono">${kmText(tyre.odometer_km)}</td><td class="mono">${tyre.km_survived === null ? '<span class="hint">Awaiting next recorded change</span>' : kmText(tyre.km_survived)}</td><td>${fullDate(tyre.replaced_on)}</td></tr>`).join('')}</tbody></table></div></div>` : ''}
@@ -351,6 +353,7 @@ async function viewBus(busNo) {
           </div></div>
         ${d.entries.length ? `<ol class="timeline" id="timeline">${d.entries.map(eventItem).join('')}</ol><p class="hint" id="tl-empty" style="padding:0 16px 16px" hidden>No entries of this type.</p>`
           : `<div class="empty"><b>No entries yet</b><span>Enter the first bill for this bus.</span><a class="btn" href="#new/${encodeURIComponent(b.bus_no)}">Enter a bill</a></div>`}
+        ${d.voided.length ? `<details class="removed"><summary>Removed entries (${d.voided.length})</summary><p class="hint">These no longer count in costs or repeat checks. They are kept here, with the reason, for the record.</p><ul>${d.voided.map((v) => `<li><b>${fullDate(v.date_in)}</b> · ${esc(v.title)} · ${inr(v.total_cost)} <span class="mono hint">${esc(v.entry_id)}</span><br><span class="hint">Removed${v.removed_by ? ` by ${esc(v.removed_by)}` : ''}${v.removed_at ? ` on ${esc(v.removed_at.slice(0, 10))}` : ''}: ${esc(v.reason)}</span></li>`).join('')}</ul></details>` : ''}
       </div>
       <div class="right">
         <div class="panel"><div class="panel-h"><h2>Spending between services</h2></div><div class="spend">${spendHTML}</div></div>
@@ -366,6 +369,52 @@ async function viewBus(busNo) {
     $$('#timeline .ev').forEach((li) => { li.hidden = btn.dataset.f !== 'all' && li.dataset.kind !== btn.dataset.f; if (!li.hidden) shown++; });
     const empty = $('#tl-empty');
     if (empty) empty.hidden = shown > 0;
+  });
+  $('.detail').addEventListener('click', async (e) => { // inside this page's own content, so listeners never pile up
+    const btn = e.target.closest('[data-void]');
+    if (!btn) return;
+    const reason = await askReason({
+      title: `Remove entry ${btn.dataset.void}?`,
+      hint: 'It stops counting in costs and repeat checks, but is kept in the history with your reason. Write why it should not count, for example "Entered against the wrong bus".',
+      confirmLabel: 'Remove entry',
+    });
+    if (reason === null) return;
+    try {
+      await postJSON(`/api/entries/${encodeURIComponent(btn.dataset.void)}/void`, { reason });
+      toast('Entry removed.');
+      router();
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+}
+
+// A small box that asks for a written reason. Resolves with the text, or null if cancelled.
+function askReason({ title, hint, confirmLabel }) {
+  return new Promise((resolve) => {
+    const dlg = document.createElement('dialog');
+    dlg.className = 'ask';
+    dlg.innerHTML = `<form class="ask-form" novalidate><h2>${esc(title)}</h2><p class="hint">${esc(hint)}</p>
+      <textarea rows="3" maxlength="300" aria-label="Reason"></textarea><div class="error" hidden></div>
+      <div class="btns"><button class="btn danger" type="submit">${esc(confirmLabel)}</button><button class="btn ghost" type="button" data-cancel>Cancel</button></div></form>`;
+    document.body.append(dlg);
+    let answer = null;
+    dlg.addEventListener('close', () => { dlg.remove(); resolve(answer); });
+    $('[data-cancel]', dlg).addEventListener('click', () => dlg.close());
+    $('form', dlg).addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      const text = $('textarea', dlg).value.trim();
+      if (text.length < 5) {
+        const box = $('.error', dlg);
+        box.textContent = 'Write a short reason (at least 5 characters).';
+        box.hidden = false;
+        return;
+      }
+      answer = text;
+      dlg.close();
+    });
+    dlg.showModal();
+    $('textarea', dlg).focus();
   });
 }
 
@@ -675,7 +724,7 @@ async function viewBuses() {
         <div class="btns"><button class="btn" type="submit">Add bus</button></div>
       </div>
     </form>
-    <p class="ann">To change an existing bus (route, driver, or retiring it), edit the Buses or Route assignments tab in the Excel file. Close the file in Excel before entering bills here, so the two don't overwrite each other.</p>`;
+    <p class="ann">To change a bus (driver, registration, route, or retiring it), open the bus and choose <b>Edit bus</b>. Every change is recorded in the change log.</p>`;
   $('#busform').addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const body = { bus_no: $('#b-no').value.trim(), route_name: $('#b-route').value, make_model: $('#b-model').value, reg_no: $('#b-reg').value, year: $('#b-year').value, seats: $('#b-seats').value, driver_name: $('#b-driver').value, service_every_km: $('#b-km').value };
@@ -687,6 +736,47 @@ async function viewBuses() {
     } catch (err) {
       $('#bus-error').textContent = err.message;
       $('#bus-error').hidden = false;
+    }
+  });
+}
+
+// ---------- Edit a bus
+
+async function viewEditBus(busNo) {
+  const { bus: b } = await api(`/api/buses/${encodeURIComponent(busNo)}`);
+  main.innerHTML = `
+    <div class="topbar"><div><h1>Edit Bus ${esc(b.bus_no)}</h1><p class="sub">Change the details. The bus number stays the same, because its history is filed under it.</p></div></div>
+    <form class="panel" id="editform" novalidate>
+      <div class="busform">
+        <div class="error" id="eb-error" style="grid-column:1/-1" hidden></div>
+        <div class="field"><label for="eb-route">Route</label><input id="eb-route" value="${esc(b.route)}" placeholder="Hillside Colony"></div>
+        <div class="field"><label for="eb-model">Make / model</label><input id="eb-model" value="${esc(b.make_model)}"></div>
+        <div class="field"><label for="eb-reg">Registration</label><input id="eb-reg" value="${esc(b.reg_no)}"></div>
+        <div class="field"><label for="eb-year">Year</label><input id="eb-year" inputmode="numeric" value="${esc(b.year)}"></div>
+        <div class="field"><label for="eb-seats">Seats</label><input id="eb-seats" inputmode="numeric" value="${esc(b.seats)}"></div>
+        <div class="field"><label for="eb-driver">Driver</label><input id="eb-driver" value="${esc(b.driver_name)}"></div>
+        <div class="field"><label for="eb-km">Service every (km)</label><input id="eb-km" inputmode="numeric" value="${esc(b.service_every_km)}"></div>
+        <div class="field"><label for="eb-days">Service every (days)</label><input id="eb-days" inputmode="numeric" value="${esc(b.service_every_days)}"></div>
+        <div class="field full"><label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="eb-active" ${b.active === false ? '' : 'checked'} style="width:auto"> This bus is still in use</label>
+          <span class="hint">Untick to retire it. A retired bus leaves the fleet screens, but its history is kept and you can bring it back here.</span></div>
+        <div class="btns"><button class="btn" type="submit">Save changes</button><button class="btn ghost" type="button" data-go="#bus/${encodeURIComponent(b.bus_no)}">Cancel</button></div>
+      </div>
+    </form>`;
+  $('#editform').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const body = {
+      route_name: $('#eb-route').value, make_model: $('#eb-model').value, reg_no: $('#eb-reg').value, year: $('#eb-year').value,
+      seats: $('#eb-seats').value, driver_name: $('#eb-driver').value, service_every_km: $('#eb-km').value,
+      service_every_days: $('#eb-days').value, active: $('#eb-active').checked,
+    };
+    try {
+      const r = await putJSON(`/api/buses/${encodeURIComponent(b.bus_no)}`, body);
+      listsCache = null;
+      toast(r.changed ? `Saved ${r.changed} change${r.changed === 1 ? '' : 's'}.` : 'Nothing was changed.');
+      location.hash = `#bus/${encodeURIComponent(b.bus_no)}`;
+    } catch (err) {
+      $('#eb-error').textContent = err.message;
+      $('#eb-error').hidden = false;
     }
   });
 }

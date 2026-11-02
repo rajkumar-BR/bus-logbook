@@ -292,3 +292,15 @@ a.btn{text-decoration:none;display:inline-block}
 body{margin:0}
 .fleet td:nth-child(2){min-width:170px}
 .fleet td.mono,.flag{white-space:nowrap}
+
+/* removing an entry, and the removed-entries list */
+.btn.danger{background:var(--crit);color:#fff}
+.ev-links button.danger{color:var(--crit)}
+dialog.ask{border:1px solid var(--line);border-radius:10px;padding:18px 20px;width:min(440px,92vw);background:var(--surface);color:inherit}
+dialog.ask::backdrop{background:rgba(0,0,0,.35)}
+dialog.ask h2{margin:0 0 6px;font-size:18px}
+dialog.ask textarea{width:100%;margin:10px 0;font:inherit;padding:8px;border:1px solid var(--line);border-radius:6px;resize:vertical;box-sizing:border-box}
+dialog.ask .error{margin-bottom:10px}
+details.removed{padding:12px 16px;border-top:1px solid var(--line)}
+details.removed summary{cursor:pointer;font-weight:600}
+details.removed ul{margin:8px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:8px}

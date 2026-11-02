@@ -254,7 +254,9 @@ npm test
 
 ## Important rules
 
-- Entries are never deleted or overwritten. Correction creates a new corrected record and logs the change.
+- Entries are never deleted or overwritten. **Correct this entry** saves a corrected copy, marks the old one "Corrected" and logs what changed.
+- **Remove entry** is for an entry that should not exist (wrong bus, entered twice). It asks for a reason, stops the entry counting in costs and repeat checks, and keeps it on the bus page under "Removed entries" with who removed it, when and why. It also goes in the change log.
+- **Edit bus** (on a bus's page) changes the driver, registration, make, year, seats, service interval and route, and retires or brings back a bus. The bus number never changes. A new route starts today and the old one ends yesterday, so past visits keep the route they had. Every change is written to the change log.
 - Keep the workbook closed in Excel while the app is writing to it.
 - Back up `data/` regularly, especially before making major changes.
 - Never commit secrets such as API keys or passwords into the repository.

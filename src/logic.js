@@ -11,7 +11,8 @@ const REPAIR_KINDS = [KINDS.REPAIR, KINDS.BREAKDOWN];
 
 // ---------- small helpers
 
-export const isActive = (r) => r.record_status !== 'Corrected';
+// Corrected (replaced by a newer copy) and Voided (removed, with a reason) records stay stored but no longer count.
+export const isActive = (r) => r.record_status !== 'Corrected' && r.record_status !== 'Voided';
 export const isRepair = (e) => REPAIR_KINDS.includes(e.kind);
 export const isService = (e) => e.kind === KINDS.SERVICE;
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : Number(v) || 0);

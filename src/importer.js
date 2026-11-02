@@ -306,7 +306,8 @@ export function planImport(parsed, existing, ctx) {
   // 5. Entries
   const existingEntryIds = new Set(existing.Entries.map((e) => e.entry_id).filter(Boolean));
   const naturalKey = (e) => [e.bus_no, e.date_in, e.kind, e.system, e.problem_reported, e.total_cost, e.bill_no].map((x) => String(x ?? '').toLowerCase()).join('|');
-  const existingKeys = new Set(existing.Entries.filter(L.isActive).map(naturalKey));
+  // removed (voided) entries still count here, so importing the same file again does not bring them back
+  const existingKeys = new Set(existing.Entries.filter((e) => e.record_status !== 'Corrected').map(naturalKey));
   const fileEntryIds = new Set();
   const skippedEntryIds = new Set();
   const entryRows = [];

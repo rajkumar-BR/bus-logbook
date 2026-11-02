@@ -45,6 +45,7 @@ export const TABS = {
     ['is_repeat', 'bool'], ['filled_by_ai', 'bool'],
     ['record_status', 'text'], ['replaces_entry_id', 'text'],
     ['entered_by', 'text'], ['entered_at', 'datetime'],
+    ['voided_reason', 'text'], ['voided_by', 'text'], ['voided_at', 'datetime'],
   ],
   'Parts changed': [
     ['school_id', 'text'], ['entry_id', 'text'], ['bus_no', 'text'], ['system', 'text'], ['part_name', 'text'],

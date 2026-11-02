@@ -31,6 +31,7 @@ export function createService(storage, { readBill = null, today = localToday, us
       dailyReports: t['Daily reports'].filter((report) => report.report_id && L.isActive(report)),
       trips: t.Trips.filter((trip) => trip.trip_id && L.isActive(trip)),
       entries: t.Entries.filter((e) => e.entry_id && L.isActive(e)),
+      voided: t.Entries.filter((e) => e.entry_id && e.record_status === 'Voided'),
       parts: t['Parts changed'].filter(L.isActive),
       workshops: t.Workshops.map((w) => w.workshop_name).filter(Boolean),
       docs: t['Bus documents'],
@@ -166,13 +167,17 @@ export function createService(storage, { readBill = null, today = localToday, us
       lifeChart: f.lifeChart,
       tyreHistory,
       entries,
+      voided: d.voided.filter((e) => e.bus_no === busNo).sort(L.byDate).reverse().map((e) => ({
+        entry_id: e.entry_id, kind: e.kind, title: e.system || e.kind, date_in: e.date_in, total_cost: e.total_cost,
+        reason: e.voided_reason, removed_by: e.voided_by, removed_at: e.voided_at,
+      })),
     };
   }
 
   async function getEntry(entryId) {
     const d = await load();
     const e = d.entries.find((x) => x.entry_id === entryId);
-    if (!e) throw new UserError(`Entry ${entryId} was not found, or it has already been corrected.`, 404);
+    if (!e) throw new UserError(`Entry ${entryId} was not found, or it has already been corrected or removed.`, 404);
     return { ...e, parts: d.parts.filter((p) => p.entry_id === entryId), bill_url: storage.fileUrl(e.bill_link) };
   }
 
@@ -413,13 +418,25 @@ export function createService(storage, { readBill = null, today = localToday, us
     return { e, parts };
   }
 
+  // Keep the bus status in step: an active visit with no date out means the bus is still in the workshop.
+  function syncBusStatus(tx, busNo, now) {
+    const open = tx.read('Entries').filter((r) => r.bus_no === busNo && L.isActive(r) && r.entry_id && !r.date_out);
+    const bus = tx.read('Buses').find((b) => b.bus_no === busNo);
+    if (!bus) return;
+    const want = open.length ? STATUS.IN_WORKSHOP : bus.status === STATUS.IN_WORKSHOP ? STATUS.ON_ROUTE : bus.status;
+    if (want && want !== bus.status) {
+      tx.update('Buses', (b) => b.bus_no === busNo, { status: want });
+      tx.append('Change log', [{ timestamp: now, user, action: 'Updated', tab: 'Buses', record_id: busNo, field: 'status', old_value: bus.status || '', new_value: want }]);
+    }
+  }
+
   async function saveEntry(input, files = {}, { correctsId = null } = {}) {
     const d = await load();
     const { e, parts } = validate(input, d);
     let old = null;
     if (correctsId) {
       old = d.entries.find((x) => x.entry_id === correctsId);
-      if (!old) throw new UserError(`Entry ${correctsId} was not found, or it has already been corrected.`, 404);
+      if (!old) throw new UserError(`Entry ${correctsId} was not found, or it has already been corrected or removed.`, 404);
       if (old.bus_no !== e.bus_no) throw new UserError('A correction must stay on the same bus. Add a new entry for the other bus instead.');
     }
 
@@ -486,14 +503,7 @@ export function createService(storage, { readBill = null, today = localToday, us
         tx.append('Change log', [{ timestamp: now, user, action: 'Added', tab: 'Entries', record_id: entryId, field: '', old_value: '', new_value: `${e.kind}, Bus ${e.bus_no}, ₹${e.total_cost}` }]);
       }
 
-      // Keep the bus status in step: no date out means the bus is still in the workshop.
-      const open = tx.read('Entries').filter((r) => r.bus_no === e.bus_no && L.isActive(r) && r.entry_id && !r.date_out);
-      const bus = tx.read('Buses').find((b) => b.bus_no === e.bus_no);
-      const want = open.length ? STATUS.IN_WORKSHOP : bus.status === STATUS.IN_WORKSHOP ? STATUS.ON_ROUTE : bus.status;
-      if (want && want !== bus.status) {
-        tx.update('Buses', (b) => b.bus_no === e.bus_no, { status: want });
-        tx.append('Change log', [{ timestamp: now, user, action: 'Updated', tab: 'Buses', record_id: e.bus_no, field: 'status', old_value: bus.status || '', new_value: want }]);
-      }
+      syncBusStatus(tx, e.bus_no, now);
 
       if (e.workshop && !tx.read('Workshops').some((w) => w.workshop_name.toLowerCase() === e.workshop.toLowerCase())) {
         tx.append('Workshops', [{ workshop_name: e.workshop }]);
@@ -541,6 +551,87 @@ export function createService(storage, { readBill = null, today = localToday, us
     return d.buses.map((b) => ({ ...b, route: currentRoute(d, b.bus_no) }));
   }
 
+  // Removes a visit from the books without deleting it: it stops counting in costs and repeat checks,
+  // stays stored with who removed it, when and why, and is listed under "Removed entries" on the bus page.
+  async function voidEntry(entryId, reason) {
+    const why = String(reason || '').trim();
+    if (why.length < 5) throw new UserError('Write a short reason for removing this entry (at least 5 characters).');
+    const now = localNow();
+    return storage.transact((tx) => {
+      const e = tx.read('Entries').find((r) => r.entry_id === entryId && L.isActive(r));
+      if (!e) throw new UserError(`Entry ${entryId} was not found, or it has already been corrected or removed.`, 404);
+      tx.update('Entries', (r) => r.entry_id === entryId, { record_status: 'Voided', voided_reason: why, voided_by: user, voided_at: now });
+      tx.update('Parts changed', (p) => p.entry_id === entryId, { record_status: 'Voided' });
+      tx.append('Change log', [{ timestamp: now, user, action: 'Removed', tab: 'Entries', record_id: entryId, field: 'reason', old_value: `${e.kind}, Bus ${e.bus_no}, ₹${e.total_cost}`, new_value: why }]);
+      syncBusStatus(tx, e.bus_no, now);
+      return { entry_id: entryId, bus_no: e.bus_no };
+    });
+  }
+
+  // Changes a bus's details. The bus number never changes, because visits refer to it.
+  // A new route starts today and the old assignment ends yesterday, so past visits keep the route they had.
+  async function updateBus(busNo, input) {
+    const text = (v) => String(v ?? '').trim();
+    const whole = (v, label, min, max) => {
+      if (v === '' || v === null || v === undefined) return '';
+      const n = Number(String(v).replace(/[,\s]/g, ''));
+      if (!Number.isInteger(n) || n < min || n > max) throw new UserError(`${label} must be a whole number from ${min} to ${max}.`);
+      return n;
+    };
+    const next = {};
+    if ('reg_no' in input) next.reg_no = text(input.reg_no);
+    if ('make_model' in input) next.make_model = text(input.make_model);
+    if ('driver_name' in input) next.driver_name = text(input.driver_name);
+    if ('year' in input) next.year = whole(input.year, 'The year', 1980, Number(today().slice(0, 4)) + 1);
+    if ('seats' in input) next.seats = whole(input.seats, 'Seats', 1, 200);
+    if ('service_every_km' in input) next.service_every_km = whole(input.service_every_km, 'Service every (km)', 100, 200000);
+    if ('service_every_days' in input) next.service_every_days = whole(input.service_every_days, 'Service every (days)', 1, 1000);
+    if ('active' in input) next.active = Boolean(input.active);
+    const routeIn = 'route_name' in input ? text(input.route_name) : null;
+    const now = localNow();
+
+    return storage.transact((tx) => {
+      const bus = tx.read('Buses').find((b) => b.bus_no === busNo);
+      if (!bus) throw new UserError(`There is no bus "${busNo}".`, 404);
+      const log = [];
+      const changed = {};
+      for (const [k, v] of Object.entries(next)) {
+        const before = k === 'active' ? bus.active !== false : bus[k];
+        if (String(before ?? '') === String(v ?? '')) continue;
+        changed[k] = v;
+        log.push({ field: k, old_value: String(before ?? ''), new_value: String(v ?? '') });
+      }
+      if (Object.keys(changed).length) tx.update('Buses', (b) => b.bus_no === busNo, changed);
+
+      if (routeIn !== null) {
+        const assignments = tx.read('Route assignments');
+        const routes = tx.read('Routes');
+        const currentId = L.routeAt(assignments, busNo, today());
+        const currentName = (routes.find((r) => r.route_id === currentId) || {}).route_name || '';
+        if (routeIn.toLowerCase() !== currentName.toLowerCase()) {
+          const open = (a) => a.bus_no === busNo && !a.to_date;
+          const startedBefore = (a) => open(a) && a.from_date && a.from_date < today();
+          const startedToday = (a) => open(a) && (!a.from_date || a.from_date >= today());
+          let route = routes.find((r) => r.route_name.toLowerCase() === routeIn.toLowerCase());
+          if (routeIn && !route) {
+            route = { route_id: `R${String(routes.length + 1).padStart(2, '0')}`, route_name: routeIn, notes: '' };
+            tx.append('Routes', [route]);
+          }
+          // an earlier assignment ends yesterday, so past visits keep their route; one that began today is just changed
+          tx.update('Route assignments', startedBefore, { to_date: L.addDays(today(), -1) });
+          if (!route) tx.update('Route assignments', startedToday, { from_date: '' }); // set and cleared on the same day: it never applied
+          else if (assignments.some(startedToday)) tx.update('Route assignments', startedToday, { route_id: route.route_id });
+          else tx.append('Route assignments', [{ bus_no: busNo, route_id: route.route_id, from_date: today(), to_date: '' }]);
+          log.push({ field: 'route', old_value: currentName, new_value: routeIn });
+        }
+      }
+
+      if (!log.length) return { bus_no: busNo, changed: 0 };
+      tx.append('Change log', log.map((l) => ({ timestamp: now, user, action: 'Updated', tab: 'Buses', record_id: busNo, ...l })));
+      return { bus_no: busNo, changed: log.length };
+    });
+  }
+
   // ---------- import from Excel
 
   const IMPORT_READS = ['Buses', 'Entries', 'Parts changed', 'Bus documents', 'Workshops', 'Route assignments', 'Lists'];
@@ -581,5 +672,5 @@ export function createService(storage, { readBill = null, today = localToday, us
     return I.buildTemplate({ kinds: lists.entry_kinds, systems: lists.systems });
   }
 
-  return { getLists, getFleet, getBus, getEntry, getRepeats, getDailyReport, saveDailyReport, checkRepeat, readBillFields, saveEntry, addBus, listBuses, importWorkbook, importTemplate };
+  return { getLists, getFleet, getBus, getEntry, getRepeats, getDailyReport, saveDailyReport, checkRepeat, readBillFields, saveEntry, voidEntry, addBus, updateBus, listBuses, importWorkbook, importTemplate };
 }
