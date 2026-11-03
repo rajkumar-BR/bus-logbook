@@ -82,6 +82,34 @@ async function router() {
   window.scrollTo(0, 0);
 }
 window.addEventListener('hashchange', router);
+
+// Show whose logbook this is: the organisation in the sidebar and the tab title, the signed-in user and a Log out link.
+// (Plain fetch, not api(): this runs once at start and must not be dropped when the first page loads.)
+async function showAccount() {
+  try {
+    const res = await fetch('/api/account', { credentials: 'same-origin' });
+    if (!res.ok) return;
+    const account = await res.json();
+    $('.brand span').textContent = account.organisation || 'Transport office';
+    if (account.organisation) document.title = `${account.organisation} · Bus Logbook`;
+    const foot = $('#foot');
+    foot.textContent = '';
+    const who = document.createElement('div');
+    who.textContent = account.email;
+    const out = document.createElement('a');
+    out.href = '#';
+    out.textContent = 'Log out';
+    out.addEventListener('click', async (e) => {
+      e.preventDefault();
+      await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
+      window.location.href = '/login.html';
+    });
+    foot.append(who, out);
+  } catch {
+    $('.brand span').textContent = 'Transport office';
+  }
+}
+showAccount();
 document.addEventListener('click', (e) => {
   const go = e.target.closest('[data-go]');
   if (go) { location.hash = go.dataset.go; }

@@ -38,14 +38,15 @@ button,input,select,textarea{font:inherit;color:inherit}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .side{background:#0A0C0B;color:var(--ink)}}
 .brand{background:var(--accent);color:var(--accent-ink);border-radius:6px;padding:10px 12px}
 .brand b{display:block;font-family:var(--display);font-stretch:75%;font-weight:800;font-size:22px;letter-spacing:.01em;line-height:1;text-transform:uppercase}
-.brand span{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase}
+.brand span{display:block;margin-top:4px;font-size:11px;font-weight:600;letter-spacing:.08em;line-height:1.3;text-transform:uppercase;overflow-wrap:anywhere}
 .nav{display:flex;flex-direction:column;gap:2px}
 .nav button{all:unset;cursor:pointer;display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:6px;font-weight:500;opacity:.72}
 .nav button:hover{opacity:1;background:rgba(255,255,255,.06)}
 .nav button[aria-current="page"]{opacity:1;background:rgba(255,255,255,.1);box-shadow:inset 3px 0 0 var(--accent)}
 .nav button:focus-visible{outline:2px solid var(--accent)}
 .nav svg{width:18px;height:18px;flex:none}
-.side .foot{margin-top:auto;font-size:12px;opacity:.6;line-height:1.4}
+.side .foot{margin-top:auto;font-size:12px;opacity:.75;line-height:1.5;overflow-wrap:anywhere}
+.side .foot a{color:inherit;text-decoration:underline;cursor:pointer}
 
 main{padding:22px 28px 48px;min-width:0}
 .topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:18px}
@@ -244,9 +245,10 @@ fieldset{border:1px solid var(--line);border-radius:8px;padding:12px;margin:0}
 @media (max-width:900px){
   .app{grid-template-columns:1fr}
   .side{position:sticky;height:auto;flex-direction:row;align-items:center;padding:10px 16px;gap:12px;z-index:5;overflow-x:auto}
-  .brand{padding:6px 9px}.brand b{font-size:16px}.brand span{display:none}
+  .brand{padding:6px 9px;flex:none}.brand b{font-size:16px}.brand span{margin-top:2px;font-size:10px;white-space:nowrap;max-width:150px;overflow:hidden;text-overflow:ellipsis}
   .nav{flex-direction:row}.nav button{white-space:nowrap;padding:7px 9px}
-  .side .foot{display:none}
+  .side .foot{margin:0;white-space:nowrap;flex:none;opacity:.85}
+  .side .foot div{display:none}
   main{padding:18px 16px 40px}
   .strip{grid-template-columns:repeat(2,minmax(0,1fr))}
   .detail{grid-template-columns:1fr}
