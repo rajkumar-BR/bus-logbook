@@ -88,9 +88,40 @@ Create an API key at https://console.anthropic.com, put it in `.env` as `ANTHROP
 
 Each organisation has a few settings in its `settings` table: `default_service_km` (10000), `default_service_days` (90), `repeat_window_days` (180) and `ai_enabled` (`TRUE`/`FALSE`). There is no screen for them yet; change them with SQL.
 
+## Configuration
+
+Settings are environment variables: in a `.env` file locally (copy `.env.example`), or in the host's Environment page when deployed.
+
+| Setting | Meaning |
+|---|---|
+| `DATABASE_URL` | **Required.** Postgres connection string |
+| `DATABASE_SSL` | `require` for hosted databases such as Supabase |
+| `PORT`, `HOST` | Where the app listens. Set `HOST=0.0.0.0` on a host such as Render (`render.yaml` does) |
+| `FILES` | `local` (default) or `s3`, see below |
+| `DATA_DIR` | Folder for bills and photos when `FILES=local` (default `./data`) |
+| `S3_BUCKET`, `S3_ENDPOINT`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | The bucket when `FILES=s3` |
+| `SIGNUP_CODE` | If set, signup asks for this code |
+| `ALLOW_SIGNUP` | `false` closes signup |
+| `PAYMENT_URL`, `PAYMENT_NOTE`, `SUPPORT_EMAIL` | Shown to organisations waiting for approval |
+| `ANTHROPIC_API_KEY` | Turns on AI bill reading |
+
 ## Deploying
 
-Follow [DEPLOY.md](DEPLOY.md): Supabase for the database and bucket, Render for the app. [render.yaml](render.yaml) is a ready-made blueprint, and `/healthz` is the health-check URL.
+The app keeps no data of its own: records are in Postgres and bills and photos are in an S3-compatible bucket. That means it can run on any host and be restarted or redeployed safely. [DEPLOY.md](DEPLOY.md) is a step-by-step guide for **Supabase** (database and bucket) and **Render** (the app). [render.yaml](render.yaml) is a ready-made Render blueprint, and `/healthz` is the health-check URL (it answers only when the database does).
+
+**Running the live site**
+
+- **Updating:** push to `main` and Render redeploys. New database columns are added automatically on start, so most updates need nothing else.
+- **Admin commands on the live database:** Render's free plan has no shell, so run them from your own computer with the production settings in front of the command (the password is asked for when creating users):
+
+  ```bash
+  DATABASE_URL='<Supabase session pooler URL>' DATABASE_SSL=require node scripts/admin.js list
+  ```
+
+  Use the **session pooler** URL from Supabase's *Connect* panel (host ends in `.pooler.supabase.com`, port 5432), with your database password in it. Keep that URL private.
+- **Backups:** `pg_dump "$DATABASE_URL" > backup.sql` backs up the records. The bucket holds the files. Free Supabase projects have no automatic backups and pause after a week of inactivity, so use a paid plan for real customers.
+- **Render's free plan** sleeps after 15 minutes without traffic (the first request then takes about a minute). Use a paid plan for real use. Do not use Render's free Postgres: it is deleted after 30 days.
+- **Before real customers:** set a strong `SIGNUP_CODE` (or `ALLOW_SIGNUP=false`), and remember emails are not verified and there is no password reset by email yet.
 
 ## For developers
 
@@ -115,4 +146,4 @@ How it fits together: every request runs as a signed-in user, and `createService
 npm test
 ```
 
-Without a database the Postgres tests are skipped. To run them, set `DATABASE_URL` (each test uses its own temporary schema). To also run the S3 tests, start a local S3 server (`docker run -d --name buslog-s3 -p 9090:9090 adobe/s3mock`), create a bucket in it, and set `S3_ENDPOINT=http://localhost:9090 S3_BUCKET=<bucket> S3_ACCESS_KEY_ID=x S3_SECRET_ACCESS_KEY=x`.
+Without a database the Postgres tests are skipped. (`DB_SCHEMA` is an advanced setting used by the tests to keep each run in its own temporary schema.) To run them, set `DATABASE_URL` (each test uses its own temporary schema). To also run the S3 tests, start a local S3 server (`docker run -d --name buslog-s3 -p 9090:9090 adobe/s3mock`), create a bucket in it, and set `S3_ENDPOINT=http://localhost:9090 S3_BUCKET=<bucket> S3_ACCESS_KEY_ID=x S3_SECRET_ACCESS_KEY=x`.
