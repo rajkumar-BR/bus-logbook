@@ -147,3 +147,28 @@ test('expense can be added to an existing bus-day, replaced, or create a new one
   await assert.rejects(service.saveExpense({ bus_no: '01', report_date: '2026-10-22', amount: -5 }), /amount/);
   await assert.rejects(service.saveExpense({ bus_no: '01', report_date: '2026-12-01', amount: 5 }), /future/);
 });
+
+test('a bus is offered as many trips as it has routes today, and a one-trip day can be saved', async () => {
+  const storage = memoryStorage({
+    Buses: [
+      { bus_no: '01', driver_name: 'Driver A', active: true, status: 'On route' },
+      { bus_no: '02', driver_name: 'Driver B', active: true, status: 'On route' },
+    ],
+    Routes: [{ route_id: 'R01', route_name: 'A' }, { route_id: 'R02', route_name: 'B' }, { route_id: 'R02-T2', route_name: 'C' }],
+    'Route assignments': [
+      { bus_no: '01', route_id: 'R01', from_date: '2026-06-01' },
+      { bus_no: '02', route_id: 'R02', from_date: '2026-06-01' },
+      { bus_no: '02', route_id: 'R02-T2', from_date: '2026-06-01' },
+    ],
+  });
+  const service = createService(storage, { today: () => '2026-10-23', user: 'test' });
+  const lists = await service.getLists();
+  assert.deepEqual(lists.buses.map((b) => [b.bus_no, b.trips]), [['01', 1], ['02', 2]]);
+  const saved = await service.saveDailyReport({
+    report_date: '2026-10-23', bus_no: '01', driver_name: 'Driver A', income_collected: 0, expenses: 0,
+    trips: [{ origin: 'Kurur', destination: 'School', scheduled_start: '07:40', actual_start: '07:40', scheduled_end: '09:00', actual_end: '09:00', planned_km: 29, start_odometer_km: 100, end_odometer_km: 129 }],
+  }, [{ originalname: 'a.jpg', mimetype: 'image/jpeg', buffer: Buffer.from('x') }]);
+  assert.equal(saved.trip_ids.length, 1);
+  const day = await service.getDailyReport('2026-10-23');
+  assert.deepEqual(day.buses.map((b) => [b.bus_no, b.trip_count, b.trips_expected]), [['01', 1, 1], ['02', 0, 2]]);
+});

@@ -58,6 +58,12 @@ export function createService(storage, { readBill = null, today = localToday, us
     return e.system || e.kind;
   }
 
+  // One trip is a run that ends at the school; a bus that goes out again after reaching it has another route and so another trip.
+  const tripsPerDay = (d, busNo) => {
+    const t = today();
+    return Math.max(1, d.assignments.filter((a) => a.bus_no === busNo && a.from_date && a.from_date <= t && (!a.to_date || a.to_date >= t)).length);
+  };
+
   // ---------- reads
 
   async function getLists() {
@@ -65,7 +71,7 @@ export function createService(storage, { readBill = null, today = localToday, us
     return {
       ...d.lists,
       workshops: d.workshops,
-      buses: activeBuses(d).map((b) => ({ bus_no: b.bus_no, label: busLabel(d, b) })),
+      buses: activeBuses(d).map((b) => ({ bus_no: b.bus_no, label: busLabel(d, b), trips: tripsPerDay(d, b.bus_no) })),
       aiEnabled: Boolean(readBill) && String(d.settings.ai_enabled ?? 'TRUE').toUpperCase() !== 'FALSE',
       today: today(),
     };
@@ -235,6 +241,7 @@ export function createService(storage, { readBill = null, today = localToday, us
           route: currentRoute(d, bus.bus_no),
           status: !reported ? 'Not reported' : lateTrips ? 'Late' : 'On time',
           trip_count: busTrips.length,
+          trips_expected: tripsPerDay(d, bus.bus_no),
           late_trips: lateTrips,
           income_collected: Number(daily?.income_collected) || 0,
           expenses: Number(daily?.expenses) || 0,
@@ -281,7 +288,7 @@ export function createService(storage, { readBill = null, today = localToday, us
     if (!activeBuses(await load()).some((bus) => bus.bus_no === report.bus_no)) throw new UserError('Choose an active bus.');
     if (!report.driver_name) throw new UserError('Enter the driver name for this daily report.');
     if (![report.income_collected, report.expenses].every(Number.isFinite) || report.income_collected < 0 || report.expenses < 0) throw new UserError('Income and expenses must be zero or a positive amount.');
-    if (tripInputs.length !== 3 || photos.length !== 3) throw new UserError('Enter all three trips and attach one photo for each trip.');
+    if (tripInputs.length < 1 || tripInputs.length > 6 || photos.length !== tripInputs.length) throw new UserError('Enter each trip the bus made and attach one photo for each trip.');
     const trips = tripInputs.map((item, index) => ({
       trip_number: index + 1,
       origin: String(item.origin || '').trim(),
@@ -339,7 +346,7 @@ export function createService(storage, { readBill = null, today = localToday, us
         entered_at: now,
       }]);
       tx.append('Trips', savedTrips);
-      tx.append('Change log', [{ timestamp: now, user, action: 'Added', tab: 'Daily reports', record_id: reportId, field: '', old_value: '', new_value: `Bus ${report.bus_no}, income ${report.income_collected}, expenses ${report.expenses}, 3 trips` }]);
+      tx.append('Change log', [{ timestamp: now, user, action: 'Added', tab: 'Daily reports', record_id: reportId, field: '', old_value: '', new_value: `Bus ${report.bus_no}, income ${report.income_collected}, expenses ${report.expenses}, ${trips.length} trip${trips.length === 1 ? '' : 's'}` }]);
       return { report_id: reportId, bus_no: report.bus_no, driver_name: report.driver_name || bus?.driver_name || '', trip_ids: savedTrips.map((trip) => trip.trip_id) };
     });
   }

@@ -201,7 +201,7 @@ async function viewDaily(range = '') {
         <td>${fullDate(bus.report_date)}</td><td><button class="text-link" data-go="#bus/${encodeURIComponent(bus.bus_no)}">Bus ${esc(bus.bus_no)}</button><div class="hint">${esc(bus.driver_name || 'Driver not recorded')}</div></td>
         <td><span class="report-status ${bus.status === 'On time' ? 'ontime' : bus.status === 'Late' ? 'late' : 'missing'}">${esc(bus.status)}</span></td>
         <td class="mono">${inr(bus.income_collected)}</td><td class="mono">${inr(bus.expenses)}</td><td class="mono">${inr(bus.net_collection)}</td>
-        <td>${bus.trip_count}/3</td><td>${bus.late_trips}</td><td class="mono">${kmText(bus.extra_km)}</td>
+        <td>${bus.trip_count}/${bus.trips_expected}</td><td>${bus.late_trips}</td><td class="mono">${kmText(bus.extra_km)}</td>
       </tr>`).join('')}</tbody></table></div>
     </div>
     <div class="panel report-panel">
@@ -238,7 +238,7 @@ async function viewDaily(range = '') {
         <div class="field"><label for="daily-income">Income collected today (₹)</label><input id="daily-income" type="number" min="0" step="0.01" value="0" required></div>
         <div class="field"><label for="daily-expenses">Expenses today (₹)</label><input id="daily-expenses" type="number" min="0" step="0.01" value="0" required></div>
         <div class="field full"><label for="daily-notes">Daily notes</label><textarea id="daily-notes" placeholder="Fuel, tolls, delay reasons, or other notes"></textarea></div>
-        ${[1, 2, 3].map((number) => `<fieldset class="trip-leg full"><legend>Trip ${number}</legend><div class="trip-leg-grid">
+        ${Array.from({ length: Math.max(1, ...lists.buses.map((bus) => bus.trips)) }, (_, i) => i + 1).map((number) => `<fieldset class="trip-leg full" data-trip="${number}" style="display:none" disabled><legend>Trip ${number}</legend><div class="trip-leg-grid">
           <div class="field"><label for="trip-${number}-origin">From</label><input id="trip-${number}-origin" placeholder="${number === 1 ? 'Source' : `Destination ${number - 1}`}" required></div>
           <div class="field"><label for="trip-${number}-destination">To</label><input id="trip-${number}-destination" placeholder="Destination ${number}" required></div>
           <div class="field"><label for="trip-${number}-planned">Planned km</label><input id="trip-${number}-planned" type="number" min="0.1" step="0.1" required></div>
@@ -283,6 +283,16 @@ async function viewDaily(range = '') {
       button.disabled = false;
     }
   });
+  // Only as many trips as the chosen bus runs in a day are shown; none until a bus is chosen.
+  const shownTrips = () => [...document.querySelectorAll('#trip-form .trip-leg:not([disabled])')].map((el) => Number(el.dataset.trip));
+  $('#trip-bus').addEventListener('change', () => {
+    const count = (lists.buses.find((bus) => bus.bus_no === $('#trip-bus').value) || {}).trips || 0;
+    document.querySelectorAll('#trip-form .trip-leg').forEach((el) => {
+      const on = Number(el.dataset.trip) <= count;
+      el.disabled = !on;
+      el.style.display = on ? '' : 'none';
+    });
+  });
   $('#trip-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const error = $('#trip-error');
@@ -294,7 +304,7 @@ async function viewDaily(range = '') {
       income_collected: $('#daily-income').value,
       expenses: $('#daily-expenses').value,
       notes: $('#daily-notes').value.trim(),
-      trips: [1, 2, 3].map((number) => ({
+      trips: shownTrips().map((number) => ({
         origin: $(`#trip-${number}-origin`).value.trim(),
         destination: $(`#trip-${number}-destination`).value.trim(),
         planned_km: $(`#trip-${number}-planned`).value,
@@ -308,7 +318,7 @@ async function viewDaily(range = '') {
     };
     const data = new FormData();
     data.append('report', JSON.stringify(report));
-    [1, 2, 3].forEach((number) => data.append('photos', $(`#trip-${number}-photo`).files[0]));
+    shownTrips().forEach((number) => data.append('photos', $(`#trip-${number}-photo`).files[0]));
     const button = $('#trip-save');
     button.disabled = true;
     button.textContent = 'Saving…';
