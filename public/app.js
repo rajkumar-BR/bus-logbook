@@ -216,6 +216,18 @@ async function viewDaily(range = '') {
       </tr>`)).join('') || '<tr><td colspan="9" class="hint">No trip legs have been reported for this date range.</td></tr>'}
       </tbody></table></div>
     </div>
+    <div class="panel report-panel" id="expense-entry">
+      <div class="panel-h"><h2>Add an expense</h2><span class="hint">Fuel, tolls, repairs: adds to that bus's expenses for the day. No trips or photos needed</span></div>
+      <form class="trip-form" id="expense-form">
+        <div class="error full" id="expense-error" hidden></div>
+        <div class="field"><label for="exp-bus">Bus</label><select id="exp-bus" required><option value="">Choose a bus</option>${lists.buses.map((bus) => `<option value="${esc(bus.bus_no)}">${esc(bus.label)}</option>`).join('')}</select></div>
+        <div class="field"><label for="exp-date">Date</label><input id="exp-date" type="date" max="${lists.today}" value="${esc(report.to)}" required></div>
+        <div class="field"><label for="exp-amount">Amount (₹)</label><input id="exp-amount" type="number" min="0" step="0.01" required></div>
+        <div class="field"><label for="exp-mode">What to do</label><select id="exp-mode"><option value="add">Add to the day's expenses</option><option value="replace">Replace the day's total (to correct a mistake)</option></select></div>
+        <div class="field full"><label for="exp-note">What was it for</label><input id="exp-note" placeholder="Diesel, toll, puncture repair…"></div>
+        <div class="btns full"><button class="btn" type="submit" id="exp-save">Save expense</button></div>
+      </form>
+    </div>
     <div class="panel report-panel" id="trip-entry">
       <div class="panel-h"><h2>Record a bus day</h2><span class="hint">Enter daily money totals once and attach one image for each trip</span></div>
       <form class="trip-form" id="trip-form">
@@ -252,6 +264,24 @@ async function viewDaily(range = '') {
       return;
     }
     location.hash = `#daily/${encodeURIComponent(`${start}~${end}!${bus}`)}`;
+  });
+  $('#expense-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const error = $('#expense-error');
+    error.hidden = true;
+    const button = $('#exp-save');
+    button.disabled = true;
+    const date = $('#exp-date').value;
+    try {
+      const saved = await postJSON('/api/reports/expense', { bus_no: $('#exp-bus').value, report_date: date, amount: $('#exp-amount').value, mode: $('#exp-mode').value, note: $('#exp-note').value });
+      toast(`Bus ${saved.bus_no}: expenses for ${date} are now ${inr(saved.expenses)}.`);
+      const target = `#daily/${encodeURIComponent(`${date}~${date}`)}`;
+      if (location.hash === target) router(); else location.hash = target;
+    } catch (err) {
+      error.textContent = err.message;
+      error.hidden = false;
+      button.disabled = false;
+    }
   });
   $('#trip-form').addEventListener('submit', async (event) => {
     event.preventDefault();

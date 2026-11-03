@@ -220,6 +220,7 @@ app.get('/api/changelog', wrap((req) => req.service.getChangeLog({ action: Strin
 app.get('/api/repeats', wrap((req) => req.service.getRepeats()));
 app.get('/api/reports/daily', wrap((req) => req.service.getDailyReport(String(req.query.start_date || ''), String(req.query.end_date || req.query.start_date || ''), String(req.query.bus_no || ''))));
 app.post('/api/reports/daily', tripPhotos, wrap((req) => req.service.saveDailyReport(JSON.parse(req.body.report || '{}'), req.files || [])));
+app.post('/api/reports/expense', wrap((req) => req.service.saveExpense(req.body || {})));
 app.get('/api/import/template', async (req, res, next) => {
   try {
     res.set({

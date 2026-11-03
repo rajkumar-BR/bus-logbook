@@ -128,3 +128,22 @@ test('daily report rejects discontinuous odometer readings between legs', async 
     report_date: '2026-10-23', bus_no: '01', driver_name: 'Driver', income_collected: 0, expenses: 0, trips,
   }, photos), /Trip 2 must start at the odometer reading where Trip 1 ended/);
 });
+
+test('expense can be added to an existing bus-day, replaced, or create a new one', async () => {
+  const storage = memoryStorage({
+    Buses: [{ bus_no: '01', driver_name: 'Driver A', active: true, status: 'On route' }],
+    'Daily reports': [{ report_id: 'D-2026-10-22-01', report_date: '2026-10-22', bus_no: '01', driver_name: 'Driver A', income_collected: 5000, expenses: 0 }],
+  });
+  const service = createService(storage, { today: () => '2026-10-23', user: 'test' });
+  assert.equal((await service.saveExpense({ bus_no: '01', report_date: '2026-10-22', amount: 800, note: 'Diesel' })).expenses, 800);
+  assert.equal((await service.saveExpense({ bus_no: '01', report_date: '2026-10-22', amount: 150, note: 'Toll' })).expenses, 950);
+  assert.equal((await service.saveExpense({ bus_no: '01', report_date: '2026-10-22', amount: 900, mode: 'replace' })).expenses, 900);
+  const created = await service.saveExpense({ bus_no: '01', report_date: '2026-10-21', amount: 300 });
+  assert.equal(created.created, true);
+  const day = await service.getDailyReport('2026-10-22');
+  assert.equal(day.summary.income_collected, 5000);
+  assert.equal(day.summary.expenses, 900);
+  await assert.rejects(service.saveExpense({ bus_no: '99', report_date: '2026-10-22', amount: 5 }), /active bus/);
+  await assert.rejects(service.saveExpense({ bus_no: '01', report_date: '2026-10-22', amount: -5 }), /amount/);
+  await assert.rejects(service.saveExpense({ bus_no: '01', report_date: '2026-12-01', amount: 5 }), /future/);
+});

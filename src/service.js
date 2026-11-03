@@ -42,7 +42,13 @@ export function createService(storage, { readBill = null, today = localToday, us
 
   const activeBuses = (d) => d.buses.filter((b) => b.active !== false); // blank counts as active
   const routeName = (d, id) => (d.routes.find((r) => r.route_id === id) || {}).route_name || id || '';
-  const currentRoute = (d, busNo) => routeName(d, L.routeAt(d.assignments, busNo, today()));
+  // A bus can run several trips to different places: show every route it is on today.
+  const currentRoute = (d, busNo) => {
+    const t = today();
+    return d.assignments
+      .filter((a) => a.bus_no === busNo && a.from_date && a.from_date <= t && (!a.to_date || a.to_date >= t))
+      .map((a) => routeName(d, a.route_id)).join(' + ');
+  };
   const busLabel = (d, b) => `Bus ${b.bus_no}${currentRoute(d, b.bus_no) ? ` · ${currentRoute(d, b.bus_no)}` : ''}`;
 
   function entryTitle(e, parts) {
@@ -335,6 +341,39 @@ export function createService(storage, { readBill = null, today = localToday, us
       tx.append('Trips', savedTrips);
       tx.append('Change log', [{ timestamp: now, user, action: 'Added', tab: 'Daily reports', record_id: reportId, field: '', old_value: '', new_value: `Bus ${report.bus_no}, income ${report.income_collected}, expenses ${report.expenses}, 3 trips` }]);
       return { report_id: reportId, bus_no: report.bus_no, driver_name: report.driver_name || bus?.driver_name || '', trip_ids: savedTrips.map((trip) => trip.trip_id) };
+    });
+  }
+
+  // Expenses for a bus-day without the full trip form. Adds to the day's expenses (or replaces them,
+  // to correct a mistake), creating the daily report if the day has none yet.
+  async function saveExpense(input) {
+    const bus_no = String(input.bus_no || '').trim();
+    const report_date = String(input.report_date || '').trim();
+    const amount = Number(input.amount);
+    const replace = input.mode === 'replace';
+    const note = String(input.note || '').trim();
+    const validDate = /^\d{4}-\d{2}-\d{2}$/.test(report_date) && !Number.isNaN(Date.parse(`${report_date}T00:00:00`));
+    if (!validDate || report_date > today()) throw new UserError('Choose a valid date that is not in the future.');
+    const d = await load();
+    const bus = d.buses.find((item) => item.bus_no === bus_no && item.active !== false);
+    if (!bus) throw new UserError('Choose an active bus.');
+    if (!Number.isFinite(amount) || amount < 0 || (!replace && amount === 0)) throw new UserError('Enter the expense amount in rupees.');
+    const now = localNow();
+    return storage.transact((tx) => {
+      const existing = tx.read('Daily reports').find((r) => r.report_date === report_date && r.bus_no === bus_no);
+      const log = (record_id, action, old_value, new_value) => tx.append('Change log', [{ timestamp: now, user, action, tab: 'Daily reports', record_id, field: 'expenses', old_value, new_value }]);
+      if (existing) {
+        const before = Number(existing.expenses) || 0;
+        const expenses = replace ? amount : before + amount;
+        const notes = note ? [existing.notes, note].filter(Boolean).join('; ') : existing.notes;
+        tx.update('Daily reports', (r) => r.report_id === existing.report_id, { expenses, notes });
+        log(existing.report_id, 'Changed', String(before), String(expenses));
+        return { report_id: existing.report_id, bus_no, report_date, expenses, created: false };
+      }
+      const reportId = `D-${report_date}-${bus_no}-${String(tx.read('Daily reports').length + 1).padStart(3, '0')}`;
+      tx.append('Daily reports', [{ report_id: reportId, report_date, bus_no, driver_name: bus.driver_name || '', income_collected: 0, expenses: amount, notes: note, entered_by: user, entered_at: now }]);
+      log(reportId, 'Added', '', String(amount));
+      return { report_id: reportId, bus_no, report_date, expenses: amount, created: true };
     });
   }
 
@@ -698,5 +737,5 @@ export function createService(storage, { readBill = null, today = localToday, us
     return I.buildTemplate({ kinds: lists.entry_kinds, systems: lists.systems });
   }
 
-  return { getLists, getFleet, getBus, getEntry, getRepeats, getDailyReport, saveDailyReport, checkRepeat, readBillFields, saveEntry, voidEntry, addBus, updateBus, listBuses, getChangeLog, importWorkbook, importTemplate };
+  return { getLists, getFleet, getBus, getEntry, getRepeats, getDailyReport, saveDailyReport, saveExpense, checkRepeat, readBillFields, saveEntry, voidEntry, addBus, updateBus, listBuses, getChangeLog, importWorkbook, importTemplate };
 }
