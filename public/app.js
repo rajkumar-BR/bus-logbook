@@ -206,14 +206,16 @@ async function viewDaily(range = '') {
     </div>
     <div class="panel report-panel">
       <div class="panel-h"><h2>Trip legs · ${fullDate(report.from)} to ${fullDate(report.to)}</h2><span class="hint">Odometer readings should continue from one trip into the next</span></div>
-      <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Bus / driver</th><th>Trip</th><th>From → To</th><th>Start → End km</th><th>Actual / Planned</th><th>Extra km</th><th>Scheduled / Actual</th><th>Image</th></tr></thead><tbody>
+      <div id="trip-edit-slot"></div>
+      <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Bus / driver</th><th>Trip</th><th>From → To</th><th>Start → End km</th><th>Actual / Planned</th><th>Extra km</th><th>Scheduled / Actual</th><th>Image</th><th></th></tr></thead><tbody>
       ${report.buses.flatMap((bus) => bus.trips.map((trip) => `<tr>
         <td>${fullDate(bus.report_date)}</td><td>Bus ${esc(bus.bus_no)}<div class="hint">${esc(bus.driver_name)}</div></td><td>${trip.trip_number}</td><td>${esc(trip.origin)} → ${esc(trip.destination)}</td>
         <td class="mono">${Number(trip.start_odometer_km).toLocaleString('en-IN')} → ${Number(trip.end_odometer_km).toLocaleString('en-IN')}</td>
         <td class="mono">${kmText(trip.actual_km)} / ${kmText(trip.planned_km)}</td><td class="mono">${trip.extra_km > 0 ? `+${Number(trip.extra_km).toLocaleString('en-IN')} km` : `${Number(trip.extra_km).toLocaleString('en-IN')} km`}</td>
         <td>${esc(trip.scheduled_start)}–${esc(trip.scheduled_end)}<div class="hint">${esc(trip.actual_start)}–${esc(trip.actual_end)} · ${esc(trip.timing_status)}</div></td>
         <td>${trip.photo_url ? `<a href="${esc(trip.photo_url)}" target="_blank" rel="noopener"><img class="trip-thumb" src="${esc(trip.photo_url)}" alt="Bus ${esc(bus.bus_no)} trip ${trip.trip_number}" loading="lazy"></a>` : '—'}</td>
-      </tr>`)).join('') || '<tr><td colspan="9" class="hint">No trip legs have been reported for this date range.</td></tr>'}
+        <td><button class="btn ghost trip-edit" type="button" data-trip="${esc(trip.trip_id)}">Edit</button></td>
+      </tr>`)).join('') || '<tr><td colspan="10" class="hint">No trip legs have been reported for this date range.</td></tr>'}
       </tbody></table></div>
     </div>
     <div class="panel report-panel" id="expense-entry">
@@ -265,6 +267,34 @@ async function viewDaily(range = '') {
     }
     location.hash = `#daily/${encodeURIComponent(`${start}~${end}!${bus}`)}`;
   });
+  document.querySelectorAll('.trip-edit').forEach((btn) => btn.addEventListener('click', () => {
+    const bus = report.buses.find((b) => b.trips.some((t) => t.trip_id === btn.dataset.trip));
+    const t = bus.trips.find((x) => x.trip_id === btn.dataset.trip);
+    const slot = $('#trip-edit-slot');
+    slot.innerHTML = `<form class="trip-form" id="trip-edit-form" style="padding:14px;border-bottom:1px solid var(--line,#ddd)">
+      <div class="full"><b>Edit Bus ${esc(bus.bus_no)} · Trip ${t.trip_number} · ${fullDate(bus.report_date)}</b> <span class="hint">Expected ${esc(t.scheduled_start)}–${esc(t.scheduled_end)} (set under Edit bus → Trip times)</span></div>
+      <div class="error full" id="te-error" hidden></div>
+      <div class="field"><label for="te-start">Actual pick-up</label><input id="te-start" type="time" value="${esc(t.actual_start)}" required></div>
+      <div class="field"><label for="te-end">Actual drop-off</label><input id="te-end" type="time" value="${esc(t.actual_end)}" required></div>
+      <div class="field"><label for="te-planned">Planned km</label><input id="te-planned" type="number" min="0" step="0.1" value="${esc(t.planned_km)}" required></div>
+      <div class="field"><label for="te-sodo">Start km</label><input id="te-sodo" type="number" min="0" step="0.1" value="${esc(t.start_odometer_km)}" required></div>
+      <div class="field"><label for="te-eodo">End km</label><input id="te-eodo" type="number" min="0" step="0.1" value="${esc(t.end_odometer_km)}" required></div>
+      <div class="btns full"><button class="btn" type="submit">Save trip</button> <button class="btn ghost" type="button" id="te-cancel">Cancel</button></div>
+    </form>`;
+    $('#te-cancel').addEventListener('click', () => { slot.innerHTML = ''; });
+    $('#trip-edit-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      try {
+        const r = await putJSON(`/api/trips/${encodeURIComponent(t.trip_id)}`, { actual_start: $('#te-start').value, actual_end: $('#te-end').value, planned_km: $('#te-planned').value, start_odometer_km: $('#te-sodo').value, end_odometer_km: $('#te-eodo').value });
+        toast(r.changed ? 'Trip saved.' : 'Nothing was changed.');
+        router();
+      } catch (err) {
+        $('#te-error').textContent = err.message;
+        $('#te-error').hidden = false;
+      }
+    });
+    slot.scrollIntoView({ block: 'nearest' });
+  }));
   $('#expense-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const error = $('#expense-error');

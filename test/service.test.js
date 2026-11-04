@@ -224,3 +224,21 @@ test('trip photos are optional: none at all, or only for some trips', async () =
   assert.ok(some[1].photo_url);
   await assert.rejects(service.saveDailyReport({ ...base, report_date: '2026-10-20', photo_for: [5] }, [{ originalname: 'b.jpg', mimetype: 'image/jpeg', buffer: Buffer.from('b') }]), /do not match/);
 });
+
+test('a saved trip can be corrected and lateness follows', async () => {
+  const storage = memoryStorage({
+    Buses: [{ bus_no: '01', driver_name: 'A', active: true, status: 'On route' }],
+    Routes: [{ route_id: 'R01', route_name: 'A', expected_start: '07:40', expected_end: '09:00' }],
+    'Route assignments': [{ bus_no: '01', route_id: 'R01', from_date: '2026-06-01' }],
+    'Daily reports': [{ report_id: 'D1', report_date: '2026-10-22', bus_no: '01', income_collected: 0, expenses: 0 }],
+    Trips: [{ trip_id: 'D1-T1', report_id: 'D1', trip_date: '2026-10-22', bus_no: '01', trip_number: 1, origin: 'A', destination: 'School', scheduled_start: '07:40', actual_start: '07:40', scheduled_end: '09:00', actual_end: '09:00', planned_km: 29, start_odometer_km: 100, end_odometer_km: 129, actual_km: 29, extra_km: 0, late_by_minutes: 0, on_time: true }],
+  });
+  const service = createService(storage, { today: () => '2026-10-23', user: 'test' });
+  await assert.rejects(service.updateTrip('D1-T1', { actual_start: '7:40', actual_end: '09:10' }), /hours and minutes/);
+  assert.equal((await service.updateTrip('D1-T1', { actual_start: '07:40', actual_end: '09:15', start_odometer_km: 100, end_odometer_km: 131 })).changed, 2);
+  const t = (await service.getDailyReport('2026-10-22')).buses[0].trips[0];
+  assert.equal(t.timing_status, 'Late by 15 min');
+  assert.equal(t.extra_km, 2);
+  assert.equal((await service.updateTrip('D1-T1', { actual_start: '07:40', actual_end: '09:15' })).changed, 0);
+  await assert.rejects(service.updateTrip('nope', {}), /no such trip/);
+});

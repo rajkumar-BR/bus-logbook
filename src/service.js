@@ -433,6 +433,36 @@ export function createService(storage, { readBill = null, today = localToday, us
     });
   }
 
+  // Correct a saved trip: actual times, odometer readings, planned km. Expected times come from the trip's route.
+  async function updateTrip(tripId, input) {
+    const now = localNow();
+    const num = (v, label) => { const n = Number(v); if (v === '' || v === null || v === undefined || !Number.isFinite(n) || n < 0) throw new UserError(`${label} must be zero or more.`); return n; };
+    return storage.transact((tx) => {
+      const trip = tx.read('Trips').find((t) => t.trip_id === tripId);
+      if (!trip) throw new UserError('There is no such trip.', 404);
+      const next = { actual_start: String(input.actual_start ?? trip.actual_start).trim(), actual_end: String(input.actual_end ?? trip.actual_end).trim() };
+      if (!HHMM.test(next.actual_start) || !HHMM.test(next.actual_end)) throw new UserError('Enter the actual pick-up and drop-off as hours and minutes, like 07:40.');
+      next.start_odometer_km = num(input.start_odometer_km ?? trip.start_odometer_km, 'Start km');
+      next.end_odometer_km = num(input.end_odometer_km ?? trip.end_odometer_km, 'End km');
+      next.planned_km = num(input.planned_km ?? trip.planned_km, 'Planned km');
+      if (next.end_odometer_km <= next.start_odometer_km) throw new UserError('End km must be more than start km.');
+      if ('notes' in input) next.notes = String(input.notes ?? '').trim();
+      const plan = tripPlans({ assignments: tx.read('Route assignments'), routes: tx.read('Routes') }, trip.bus_no)[Number(trip.trip_number) - 1];
+      const merged = { ...trip, ...next };
+      if (plan && HHMM.test(plan.expected_start)) merged.scheduled_start = plan.expected_start;
+      if (plan && HHMM.test(plan.expected_end)) merged.scheduled_end = plan.expected_end;
+      const patch = { ...next, scheduled_start: merged.scheduled_start, scheduled_end: merged.scheduled_end, ...L.tripMetrics(merged) };
+      const log = [];
+      for (const [field, v] of Object.entries(next)) {
+        if (String(trip[field] ?? '') !== String(v ?? '')) log.push({ timestamp: now, user, action: 'Updated', tab: 'Trips', record_id: tripId, field, old_value: String(trip[field] ?? ''), new_value: String(v ?? '') });
+      }
+      if (!log.length) return { trip_id: tripId, changed: 0 };
+      tx.update('Trips', (t) => t.trip_id === tripId, patch);
+      tx.append('Change log', log);
+      return { trip_id: tripId, changed: log.length };
+    });
+  }
+
   async function checkRepeat({ bus_no, system, date_in, kind, exclude_entry_id }) {
     if (![KINDS.REPAIR, KINDS.BREAKDOWN].includes(kind)) return { isRepeat: false, count: 0 };
     const d = await load();
@@ -798,5 +828,5 @@ export function createService(storage, { readBill = null, today = localToday, us
     return I.buildTemplate({ kinds: lists.entry_kinds, systems: lists.systems });
   }
 
-  return { getLists, getFleet, getBus, getEntry, getRepeats, getDailyReport, saveDailyReport, saveExpense, setTripTimes, checkRepeat, readBillFields, saveEntry, voidEntry, addBus, updateBus, listBuses, getChangeLog, importWorkbook, importTemplate };
+  return { getLists, getFleet, getBus, getEntry, getRepeats, getDailyReport, saveDailyReport, saveExpense, setTripTimes, updateTrip, checkRepeat, readBillFields, saveEntry, voidEntry, addBus, updateBus, listBuses, getChangeLog, importWorkbook, importTemplate };
 }
