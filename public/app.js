@@ -229,7 +229,7 @@ async function viewDaily(range = '') {
       </form>
     </div>
     <div class="panel report-panel" id="trip-entry">
-      <div class="panel-h"><h2>Record a bus day</h2><span class="hint">Enter daily money totals once and attach one image for each trip</span></div>
+      <div class="panel-h"><h2>Record a bus day</h2><span class="hint">Enter daily money totals once and each trip's times. Trip images are optional</span></div>
       <form class="trip-form" id="trip-form">
         <div class="error full" id="trip-error" hidden></div>
         <div class="field"><label for="trip-bus">Bus</label><select id="trip-bus" required><option value="">Choose a bus</option>${lists.buses.map((bus) => `<option value="${esc(bus.bus_no)}">${esc(bus.label)}</option>`).join('')}</select></div>
@@ -244,7 +244,7 @@ async function viewDaily(range = '') {
           <div class="field"><label for="trip-${number}-planned">Planned km</label><input id="trip-${number}-planned" type="number" min="0.1" step="0.1" required></div>
           <div class="field"><label for="trip-${number}-start-odo">Start km</label><input id="trip-${number}-start-odo" type="number" min="0" step="0.1" required></div>
           <div class="field"><label for="trip-${number}-end-odo">End km</label><input id="trip-${number}-end-odo" type="number" min="0" step="0.1" required></div>
-          <div class="field"><label for="trip-${number}-photo">Trip image</label><input id="trip-${number}-photo" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/heic" required></div>
+          <div class="field"><label for="trip-${number}-photo">Trip image <span class="hint">(optional)</span></label><input id="trip-${number}-photo" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/heic"></div>
           <div class="field"><label for="trip-${number}-scheduled-start">Scheduled start</label><input id="trip-${number}-scheduled-start" type="time" required></div>
           <div class="field"><label for="trip-${number}-actual-start">Actual start</label><input id="trip-${number}-actual-start" type="time" required></div>
           <div class="field"><label for="trip-${number}-scheduled-end">Scheduled end</label><input id="trip-${number}-scheduled-end" type="time" required></div>
@@ -287,10 +287,20 @@ async function viewDaily(range = '') {
   const shownTrips = () => [...document.querySelectorAll('#trip-form .trip-leg:not([disabled])')].map((el) => Number(el.dataset.trip));
   $('#trip-bus').addEventListener('change', () => {
     const count = (lists.buses.find((bus) => bus.bus_no === $('#trip-bus').value) || {}).trips || 0;
+    const plans = (lists.buses.find((bus) => bus.bus_no === $('#trip-bus').value) || {}).plans || [];
     document.querySelectorAll('#trip-form .trip-leg').forEach((el) => {
-      const on = Number(el.dataset.trip) <= count;
+      const n = Number(el.dataset.trip);
+      const on = n <= count;
       el.disabled = !on;
       el.style.display = on ? '' : 'none';
+      // expected times come from the trip's setting (Edit bus → Trip times); only unset ones are typed here
+      for (const [field, key] of [['scheduled-start', 'expected_start'], ['scheduled-end', 'expected_end']]) {
+        const input = $(`#trip-${n}-${field}`);
+        const set = on && plans[n - 1] && plans[n - 1][key];
+        input.readOnly = Boolean(set);
+        input.title = set ? 'Set under Edit bus → Trip times' : '';
+        if (set) input.value = plans[n - 1][key];
+      }
     });
   });
   $('#trip-form').addEventListener('submit', async (event) => {
@@ -318,7 +328,11 @@ async function viewDaily(range = '') {
     };
     const data = new FormData();
     data.append('report', JSON.stringify(report));
-    shownTrips().forEach((number) => data.append('photos', $(`#trip-${number}-photo`).files[0]));
+    const shown = shownTrips();
+    const withPhoto = shown.filter((number) => $(`#trip-${number}-photo`).files[0]);
+    withPhoto.forEach((number) => data.append('photos', $(`#trip-${number}-photo`).files[0]));
+    report.photo_for = withPhoto.map((number) => shown.indexOf(number));
+    data.set('report', JSON.stringify(report));
     const button = $('#trip-save');
     button.disabled = true;
     button.textContent = 'Saving…';
@@ -898,7 +912,7 @@ async function viewEditBus(busNo) {
     <form class="panel" id="editform" novalidate>
       <div class="busform">
         <div class="error" id="eb-error" style="grid-column:1/-1" hidden></div>
-        <div class="field"><label for="eb-route">Route</label><input id="eb-route" value="${esc(b.route)}" placeholder="Hillside Colony"></div>
+        <div class="field"><label for="eb-route">Route</label><input id="eb-route" value="${esc(b.route)}" placeholder="Hillside Colony"${(b.trip_plans || []).length > 1 ? ' readonly' : ''}></div>
         <div class="field"><label for="eb-model">Make / model</label><input id="eb-model" value="${esc(b.make_model)}"></div>
         <div class="field"><label for="eb-reg">Registration</label><input id="eb-reg" value="${esc(b.reg_no)}"></div>
         <div class="field"><label for="eb-year">Year</label><input id="eb-year" inputmode="numeric" value="${esc(b.year)}"></div>
@@ -910,7 +924,31 @@ async function viewEditBus(busNo) {
           <span class="hint">Untick to retire it. A retired bus leaves the fleet screens, but its history is kept and you can bring it back here.</span></div>
         <div class="btns"><button class="btn" type="submit">Save changes</button><button class="btn ghost" type="button" data-go="#bus/${encodeURIComponent(b.bus_no)}">Cancel</button></div>
       </div>
-    </form>`;
+    </form>
+    <div class="panel" id="trip-times" style="margin-top:18px">
+      <div class="panel-h"><h2>Trip times</h2><span class="hint">Expected pick-up and drop-off for each trip. Changing them updates the expected times on every daily report, past days too</span></div>
+      <div class="busform">
+        ${(b.trip_plans || []).map((p) => `<div class="field full" style="display:grid;grid-template-columns:minmax(160px,2fr) 1fr 1fr auto;gap:10px;align-items:end" data-route="${esc(p.route_id)}">
+          <div><label>Trip ${p.trip_number}</label><div>${esc(p.route_name)}</div></div>
+          <div><label>Expected pick-up</label><input type="time" class="tt-start" value="${esc(p.expected_start)}"></div>
+          <div><label>Expected drop-off</label><input type="time" class="tt-end" value="${esc(p.expected_end)}"></div>
+          <button class="btn tt-save" type="button">Save</button>
+        </div>`).join('') || '<span class="hint">This bus has no trips set up yet.</span>'}
+        <div class="error full" id="tt-error" hidden></div>
+      </div>
+    </div>`;
+  document.querySelectorAll('#trip-times .tt-save').forEach((btn) => btn.addEventListener('click', async () => {
+    const row = btn.closest('[data-route]');
+    $('#tt-error').hidden = true;
+    try {
+      const r = await putJSON(`/api/routes/${encodeURIComponent(row.dataset.route)}/times`, { expected_start: row.querySelector('.tt-start').value, expected_end: row.querySelector('.tt-end').value });
+      listsCache = null;
+      toast(r.changed ? 'Trip times saved.' : 'Nothing was changed.');
+    } catch (err) {
+      $('#tt-error').textContent = err.message;
+      $('#tt-error').hidden = false;
+    }
+  }));
   $('#editform').addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const body = {

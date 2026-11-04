@@ -64,6 +64,18 @@ export function createService(storage, { readBill = null, today = localToday, us
     return Math.max(1, d.assignments.filter((a) => a.bus_no === busNo && a.from_date && a.from_date <= t && (!a.to_date || a.to_date >= t)).length);
   };
 
+  // The trips a bus runs today, in order, with the expected pick-up and drop-off time set on each trip's route.
+  const tripPlans = (d, busNo) => {
+    const t = today();
+    return d.assignments
+      .filter((a) => a.bus_no === busNo && a.from_date && a.from_date <= t && (!a.to_date || a.to_date >= t))
+      .map((a, i) => {
+        const r = d.routes.find((x) => x.route_id === a.route_id) || {};
+        return { trip_number: i + 1, route_id: a.route_id, route_name: r.route_name || a.route_id, expected_start: r.expected_start || '', expected_end: r.expected_end || '' };
+      });
+  };
+  const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+
   // ---------- reads
 
   async function getLists() {
@@ -71,7 +83,7 @@ export function createService(storage, { readBill = null, today = localToday, us
     return {
       ...d.lists,
       workshops: d.workshops,
-      buses: activeBuses(d).map((b) => ({ bus_no: b.bus_no, label: busLabel(d, b), trips: tripsPerDay(d, b.bus_no) })),
+      buses: activeBuses(d).map((b) => ({ bus_no: b.bus_no, label: busLabel(d, b), trips: tripsPerDay(d, b.bus_no), plans: tripPlans(d, b.bus_no) })),
       aiEnabled: Boolean(readBill) && String(d.settings.ai_enabled ?? 'TRUE').toUpperCase() !== 'FALSE',
       today: today(),
     };
@@ -159,7 +171,7 @@ export function createService(storage, { readBill = null, today = localToday, us
 
     return {
       today: t,
-      bus: { ...b, status: b.status || STATUS.ON_ROUTE, route: currentRoute(d, busNo) },
+      bus: { ...b, status: b.status || STATUS.ON_ROUTE, route: currentRoute(d, busNo), trip_plans: tripPlans(d, busNo) },
       facts: {
         odometer: svc.odometer,
         last_service: svc.last ? svc.last.date_in : '',
@@ -227,11 +239,20 @@ export function createService(storage, { readBill = null, today = localToday, us
       const trips = d.trips.filter((trip) => trip.trip_date === reportDate).sort((a, b) => String(a.actual_start).localeCompare(String(b.actual_start)));
       return buses.map((bus) => {
         const daily = reports.find((report) => report.bus_no === bus.bus_no);
-        const busTrips = trips.filter((trip) => trip.bus_no === bus.bus_no).map((trip) => ({
-          ...trip,
-          photo_url: storage.fileUrl(trip.photo_link),
-          timing_status: trip.on_time ? 'On time' : `Late by ${trip.late_by_minutes} min`,
-        }));
+        const plans = tripPlans(d, bus.bus_no);
+        const busTrips = trips.filter((trip) => trip.bus_no === bus.bus_no).map((saved) => {
+          // Expected times are read from the trip's route, so changing them there changes every day (past ones too).
+          const plan = plans[Number(saved.trip_number) - 1];
+          const trip = { ...saved };
+          if (plan && HHMM.test(plan.expected_start)) trip.scheduled_start = plan.expected_start;
+          if (plan && HHMM.test(plan.expected_end)) trip.scheduled_end = plan.expected_end;
+          Object.assign(trip, L.tripMetrics(trip), { extra_km: saved.extra_km, actual_km: saved.actual_km });
+          return {
+            ...trip,
+            photo_url: storage.fileUrl(trip.photo_link),
+            timing_status: trip.on_time ? 'On time' : `Late by ${trip.late_by_minutes} min`,
+          };
+        });
         const reported = Boolean(daily);
         const lateTrips = busTrips.filter((trip) => !trip.on_time).length;
         return {
@@ -288,14 +309,19 @@ export function createService(storage, { readBill = null, today = localToday, us
     if (!activeBuses(await load()).some((bus) => bus.bus_no === report.bus_no)) throw new UserError('Choose an active bus.');
     if (!report.driver_name) throw new UserError('Enter the driver name for this daily report.');
     if (![report.income_collected, report.expenses].every(Number.isFinite) || report.income_collected < 0 || report.expenses < 0) throw new UserError('Income and expenses must be zero or a positive amount.');
-    if (tripInputs.length < 1 || tripInputs.length > 6 || photos.length !== tripInputs.length) throw new UserError('Enter each trip the bus made and attach one photo for each trip.');
+    if (tripInputs.length < 1 || tripInputs.length > 6) throw new UserError('Enter at least one trip.');
+    // Photos are optional. photo_for says which trips (0-based) the uploaded files belong to, in order.
+    const photoFor = Array.isArray(input.photo_for) ? input.photo_for.map(Number) : photos.map((_, i) => i);
+    if (photoFor.length !== photos.length || new Set(photoFor).size !== photoFor.length || photoFor.some((i) => !Number.isInteger(i) || i < 0 || i >= tripInputs.length)) throw new UserError('The photos do not match the trips.');
+    const photoOfTrip = tripInputs.map((_, i) => (photoFor.includes(i) ? photos[photoFor.indexOf(i)] : null));
+    const plansNow = tripPlans(await load(), report.bus_no);
     const trips = tripInputs.map((item, index) => ({
       trip_number: index + 1,
       origin: String(item.origin || '').trim(),
       destination: String(item.destination || '').trim(),
-      scheduled_start: String(item.scheduled_start || '').trim(),
+      scheduled_start: HHMM.test(plansNow[index]?.expected_start || '') ? plansNow[index].expected_start : String(item.scheduled_start || '').trim(),
       actual_start: String(item.actual_start || '').trim(),
-      scheduled_end: String(item.scheduled_end || '').trim(),
+      scheduled_end: HHMM.test(plansNow[index]?.expected_end || '') ? plansNow[index].expected_end : String(item.scheduled_end || '').trim(),
       actual_end: String(item.actual_end || '').trim(),
       planned_km: Number(item.planned_km),
       start_odometer_km: Number(item.start_odometer_km),
@@ -307,21 +333,23 @@ export function createService(storage, { readBill = null, today = localToday, us
       if (!trip.origin || !trip.destination) throw new UserError(`Enter the origin and destination for Trip ${index + 1}.`);
       if (![trip.scheduled_start, trip.actual_start, trip.scheduled_end, trip.actual_end].every(validTime)) throw new UserError(`Enter all scheduled and actual times for Trip ${index + 1}.`);
       if (![trip.planned_km, trip.start_odometer_km, trip.end_odometer_km].every(Number.isFinite) || trip.planned_km <= 0 || trip.start_odometer_km < 0 || trip.end_odometer_km <= trip.start_odometer_km) throw new UserError(`Enter a positive planned distance and increasing odometer readings for Trip ${index + 1}.`);
-      if (!photos[index]?.mimetype.startsWith('image/')) throw new UserError(`Attach an image for Trip ${index + 1}.`);
+      if (photoOfTrip[index] && !photoOfTrip[index].mimetype.startsWith('image/')) throw new UserError(`The file for Trip ${index + 1} must be an image.`);
       if (index > 0 && trip.start_odometer_km !== trips[index - 1].end_odometer_km) throw new UserError(`Trip ${index + 1} must start at the odometer reading where Trip ${index} ended.`);
     }
     const d = await load();
     const bus = d.buses.find((item) => item.bus_no === report.bus_no);
-    if (d.dailyReports.some((item) => item.report_date === report.report_date && item.bus_no === report.bus_no)) throw new UserError(`A daily report for Bus ${report.bus_no} already exists on ${report.report_date}.`);
-    const photoLinks = await Promise.all(photos.map((photo, index) => storage.saveFile(
+    const existingReport = d.dailyReports.find((item) => item.report_date === report.report_date && item.bus_no === report.bus_no);
+    // A day that only has fee income (no trips yet) takes the trips and keeps its income, expenses and notes.
+    if (existingReport && d.trips.some((t) => t.report_id === existingReport.report_id || (t.trip_date === report.report_date && t.bus_no === report.bus_no))) throw new UserError(`A daily report for Bus ${report.bus_no} already exists on ${report.report_date}.`);
+    const photoLinks = await Promise.all(photoOfTrip.map((photo, index) => (photo ? storage.saveFile(
       `Photos/Bus ${report.bus_no}/Daily trips`,
       `${report.report_date} Trip ${index + 1} ${photo.originalname}`,
       photo.buffer,
-    )));
+    ) : '')));
     const now = localNow();
     return storage.transact((tx) => {
       const allReports = tx.read('Daily reports');
-      const reportId = `D-${report.report_date}-${report.bus_no}-${String(allReports.length + 1).padStart(3, '0')}`;
+      const reportId = existingReport ? existingReport.report_id : `D-${report.report_date}-${report.bus_no}-${String(allReports.length + 1).padStart(3, '0')}`;
       const allTrips = tx.read('Trips');
       const savedTrips = trips.map((trip, index) => {
         const metrics = L.tripMetrics(trip);
@@ -338,7 +366,8 @@ export function createService(storage, { readBill = null, today = localToday, us
           entered_at: now,
         };
       });
-      tx.append('Daily reports', [{
+      if (existingReport) tx.update('Daily reports', (r) => r.report_id === reportId, { driver_name: report.driver_name || existingReport.driver_name || bus?.driver_name || '' });
+      else tx.append('Daily reports', [{
         report_id: reportId,
         ...report,
         driver_name: report.driver_name || bus?.driver_name || '',
@@ -381,6 +410,26 @@ export function createService(storage, { readBill = null, today = localToday, us
       tx.append('Daily reports', [{ report_id: reportId, report_date, bus_no, driver_name: bus.driver_name || '', income_collected: 0, expenses: amount, notes: note, entered_by: user, entered_at: now }]);
       log(reportId, 'Added', '', String(amount));
       return { report_id: reportId, bus_no, report_date, expenses: amount, created: true };
+    });
+  }
+
+  async function setTripTimes(routeId, input) {
+    const start = String(input.expected_start ?? '').trim();
+    const end = String(input.expected_end ?? '').trim();
+    for (const v of [start, end]) if (v && !HHMM.test(v)) throw new UserError('Enter times as hours and minutes, like 07:40.');
+    if (start && end && start >= end) throw new UserError('The drop-off time must be after the pick-up time.');
+    const now = localNow();
+    return storage.transact((tx) => {
+      const route = tx.read('Routes').find((r) => r.route_id === routeId);
+      if (!route) throw new UserError('There is no such trip.', 404);
+      const log = [];
+      for (const [field, v] of [['expected_start', start], ['expected_end', end]]) {
+        if (String(route[field] ?? '') !== v) log.push({ timestamp: now, user, action: 'Updated', tab: 'Routes', record_id: routeId, field, old_value: String(route[field] ?? ''), new_value: v });
+      }
+      if (!log.length) return { route_id: routeId, changed: 0 };
+      tx.update('Routes', (r) => r.route_id === routeId, { expected_start: start, expected_end: end });
+      tx.append('Change log', log);
+      return { route_id: routeId, changed: log.length };
     });
   }
 
@@ -654,7 +703,12 @@ export function createService(storage, { readBill = null, today = localToday, us
         const routes = tx.read('Routes');
         const currentId = L.routeAt(assignments, busNo, today());
         const currentName = (routes.find((r) => r.route_id === currentId) || {}).route_name || '';
-        if (routeIn.toLowerCase() !== currentName.toLowerCase()) {
+        const tripsToday = assignments.filter((a) => a.bus_no === busNo && a.from_date && a.from_date <= today() && (!a.to_date || a.to_date >= today())).length;
+        if (tripsToday > 1) {
+          // several trips: their routes are not changed here (the shown text joins them all)
+          const joined = assignments.filter((a) => a.bus_no === busNo && a.from_date && a.from_date <= today() && (!a.to_date || a.to_date >= today())).map((a) => (routes.find((r) => r.route_id === a.route_id) || {}).route_name || a.route_id).join(' + ');
+          if (routeIn !== joined) throw new UserError('This bus runs several trips, so its route cannot be changed here. Change its trip times below instead.');
+        } else if (routeIn.toLowerCase() !== currentName.toLowerCase()) {
           const open = (a) => a.bus_no === busNo && !a.to_date;
           const startedBefore = (a) => open(a) && a.from_date && a.from_date < today();
           const startedToday = (a) => open(a) && (!a.from_date || a.from_date >= today());
@@ -744,5 +798,5 @@ export function createService(storage, { readBill = null, today = localToday, us
     return I.buildTemplate({ kinds: lists.entry_kinds, systems: lists.systems });
   }
 
-  return { getLists, getFleet, getBus, getEntry, getRepeats, getDailyReport, saveDailyReport, saveExpense, checkRepeat, readBillFields, saveEntry, voidEntry, addBus, updateBus, listBuses, getChangeLog, importWorkbook, importTemplate };
+  return { getLists, getFleet, getBus, getEntry, getRepeats, getDailyReport, saveDailyReport, saveExpense, setTripTimes, checkRepeat, readBillFields, saveEntry, voidEntry, addBus, updateBus, listBuses, getChangeLog, importWorkbook, importTemplate };
 }

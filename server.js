@@ -51,7 +51,7 @@ const importUpload = multer({
   },
 });
 const entryFiles = upload.fields([{ name: 'bill', maxCount: 1 }, { name: 'photos', maxCount: 10 }]);
-const tripPhotos = upload.array('photos', 3);
+const tripPhotos = upload.array('photos', 6);
 
 const app = express();
 app.set('trust proxy', 1); // behind Render/Railway so req.secure and req.ip are right
@@ -216,6 +216,7 @@ app.get('/api/buses', wrap((req) => req.service.listBuses()));
 app.post('/api/buses', wrap((req) => req.service.addBus(req.body)));
 app.get('/api/buses/:busNo', wrap((req) => req.service.getBus(req.params.busNo)));
 app.put('/api/buses/:busNo', wrap((req) => req.service.updateBus(req.params.busNo, req.body || {})));
+app.put('/api/routes/:routeId/times', wrap((req) => req.service.setTripTimes(req.params.routeId, req.body || {})));
 app.get('/api/changelog', wrap((req) => req.service.getChangeLog({ action: String(req.query.action || ''), q: String(req.query.q || ''), page: Number(req.query.page) || 1 })));
 app.get('/api/repeats', wrap((req) => req.service.getRepeats()));
 app.get('/api/reports/daily', wrap((req) => req.service.getDailyReport(String(req.query.start_date || ''), String(req.query.end_date || req.query.start_date || ''), String(req.query.bus_no || ''))));

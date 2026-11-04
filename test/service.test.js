@@ -172,3 +172,55 @@ test('a bus is offered as many trips as it has routes today, and a one-trip day 
   const day = await service.getDailyReport('2026-10-23');
   assert.deepEqual(day.buses.map((b) => [b.bus_no, b.trip_count, b.trips_expected]), [['01', 1, 1], ['02', 0, 2]]);
 });
+
+test('expected trip times are set on the trip and apply to every day, past ones included; fee-only days take trips', async () => {
+  const storage = memoryStorage({
+    Buses: [{ bus_no: '02', driver_name: 'Driver B', active: true, status: 'On route' }],
+    Routes: [{ route_id: 'R02', route_name: 'Trip 1: A' }, { route_id: 'R02-T2', route_name: 'Trip 2: B' }],
+    'Route assignments': [
+      { bus_no: '02', route_id: 'R02', from_date: '2026-06-01' },
+      { bus_no: '02', route_id: 'R02-T2', from_date: '2026-06-01' },
+    ],
+    'Daily reports': [{ report_id: 'D-2026-10-22-02', report_date: '2026-10-22', bus_no: '02', driver_name: 'Driver B', income_collected: 3600, expenses: 0 }],
+  });
+  const service = createService(storage, { today: () => '2026-10-23', user: 'test' });
+  await assert.rejects(service.setTripTimes('R02', { expected_start: '9:00', expected_end: '10:00' }), /hours and minutes/);
+  await assert.rejects(service.setTripTimes('R02', { expected_start: '09:00', expected_end: '08:00' }), /after/);
+  await service.setTripTimes('R02', { expected_start: '08:10', expected_end: '08:30' });
+  await service.setTripTimes('R02-T2', { expected_start: '08:45', expected_end: '09:05' });
+  const leg = (o, d, s, e, a, b) => ({ origin: o, destination: d, scheduled_start: '00:00', actual_start: s, scheduled_end: '00:01', actual_end: e, planned_km: 7, start_odometer_km: a, end_odometer_km: b });
+  const img = (n) => ({ originalname: `${n}.jpg`, mimetype: 'image/jpeg', buffer: Buffer.from(n) });
+  // the day already has fee income and no trips: trips attach to it, income stays
+  await service.saveDailyReport({ report_date: '2026-10-22', bus_no: '02', driver_name: 'Driver B', income_collected: 0, expenses: 0, trips: [leg('A', 'School', '08:10', '08:40', 100, 107), leg('B', 'School', '08:45', '09:05', 107, 114)] }, [img('1'), img('2')]);
+  let day = await service.getDailyReport('2026-10-22');
+  assert.equal(day.summary.income_collected, 3600);
+  assert.deepEqual(day.buses[0].trips.map((t) => [t.scheduled_start, t.scheduled_end, t.timing_status]), [['08:10', '08:30', 'Late by 10 min'], ['08:45', '09:05', 'On time']]);
+  await assert.rejects(service.saveDailyReport({ report_date: '2026-10-22', bus_no: '02', driver_name: 'x', income_collected: 0, expenses: 0, trips: [leg('A', 'School', '08:10', '08:40', 107, 114)] }, [img('3')]), /already exists/);
+  // change the expected drop-off: the past day follows
+  await service.setTripTimes('R02', { expected_start: '08:10', expected_end: '08:45' });
+  day = await service.getDailyReport('2026-10-22');
+  assert.equal(day.buses[0].trips[0].timing_status, 'On time');
+  assert.equal(day.buses[0].trips[0].scheduled_end, '08:45');
+  // several trips: the route field cannot be used to change them
+  await assert.rejects(service.updateBus('02', { route_name: 'Somewhere else' }), /several trips/);
+  assert.equal((await service.updateBus('02', { route_name: 'Trip 1: A + Trip 2: B' })).changed, 0);
+});
+
+test('trip photos are optional: none at all, or only for some trips', async () => {
+  const storage = memoryStorage({
+    Buses: [{ bus_no: '02', driver_name: 'Driver B', active: true, status: 'On route' }],
+    Routes: [{ route_id: 'R02', route_name: 'A' }, { route_id: 'R02-T2', route_name: 'B' }],
+    'Route assignments': [{ bus_no: '02', route_id: 'R02', from_date: '2026-06-01' }, { bus_no: '02', route_id: 'R02-T2', from_date: '2026-06-01' }],
+  });
+  const service = createService(storage, { today: () => '2026-10-23', user: 'test' });
+  const leg = (a, b) => ({ origin: 'A', destination: 'School', scheduled_start: '08:00', actual_start: '08:00', scheduled_end: '09:00', actual_end: '09:00', planned_km: 7, start_odometer_km: a, end_odometer_km: b });
+  const base = { bus_no: '02', driver_name: 'Driver B', income_collected: 0, expenses: 0, trips: [leg(100, 107), leg(107, 114)] };
+  await service.saveDailyReport({ ...base, report_date: '2026-10-21' }, []);
+  await service.saveDailyReport({ ...base, report_date: '2026-10-22', photo_for: [1] }, [{ originalname: 'b.jpg', mimetype: 'image/jpeg', buffer: Buffer.from('b') }]);
+  const none = (await service.getDailyReport('2026-10-21')).buses[0].trips;
+  assert.deepEqual(none.map((t) => t.photo_url), ['', '']);
+  const some = (await service.getDailyReport('2026-10-22')).buses[0].trips;
+  assert.equal(some[0].photo_url, '');
+  assert.ok(some[1].photo_url);
+  await assert.rejects(service.saveDailyReport({ ...base, report_date: '2026-10-20', photo_for: [5] }, [{ originalname: 'b.jpg', mimetype: 'image/jpeg', buffer: Buffer.from('b') }]), /do not match/);
+});
