@@ -242,3 +242,22 @@ test('a saved trip can be corrected and lateness follows', async () => {
   assert.equal((await service.updateTrip('D1-T1', { actual_start: '07:40', actual_end: '09:15' })).changed, 0);
   await assert.rejects(service.updateTrip('nope', {}), /no such trip/);
 });
+
+test('daily report can be filtered by status, late trips and extra km', async () => {
+  const trip = (id, bus, start, end, km) => ({ trip_id: id, report_id: `D-${bus}`, trip_date: '2026-10-22', bus_no: bus, trip_number: 1, origin: 'A', destination: 'School', scheduled_start: '08:00', actual_start: start, scheduled_end: '09:00', actual_end: end, planned_km: 10, start_odometer_km: 100, end_odometer_km: 100 + km, actual_km: km, extra_km: km - 10, late_by_minutes: 0, on_time: true });
+  const storage = memoryStorage({
+    Buses: ['01', '02', '03'].map((bus_no) => ({ bus_no, driver_name: 'D', active: true, status: 'On route' })),
+    'Daily reports': ['01', '02'].map((bus_no) => ({ report_id: `D-${bus_no}`, report_date: '2026-10-22', bus_no, income_collected: 0, expenses: 0 })),
+    Trips: [trip('T1', '01', '08:00', '09:00', 10), trip('T2', '02', '08:10', '09:20', 13)],
+  });
+  const service = createService(storage, { today: () => '2026-10-23', user: 'test' });
+  const nos = async (f) => (await service.getDailyReport('2026-10-22', '2026-10-22', '', f)).buses.map((b) => b.bus_no);
+  assert.deepEqual(await nos({}), ['01', '02', '03']);
+  assert.deepEqual(await nos({ status: 'Late' }), ['02']);
+  assert.deepEqual(await nos({ status: 'Not reported' }), ['03']);
+  assert.deepEqual(await nos({ late: 'with' }), ['02']);
+  assert.deepEqual(await nos({ late: 'none' }), ['01', '03']);
+  assert.deepEqual(await nos({ extra: 'over' }), ['02']);
+  assert.deepEqual(await nos({ status: 'Late', extra: 'within' }), []);
+  assert.equal((await service.getDailyReport('2026-10-22', '2026-10-22', '', { late: 'with' })).summary.total_bus_days, 1);
+});

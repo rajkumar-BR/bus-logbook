@@ -220,7 +220,7 @@ export function createService(storage, { readBill = null, today = localToday, us
     return { systems, matrix, patterns, today: t };
   }
 
-  async function getDailyReport(startDate = today(), endDate = startDate, busNo = '') {
+  async function getDailyReport(startDate = today(), endDate = startDate, busNo = '', filters = {}) {
     const from = String(startDate || today());
     const to = String(endDate || from);
     const validDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00`));
@@ -234,7 +234,7 @@ export function createService(storage, { readBill = null, today = localToday, us
     if (selectedBus && !active.some((bus) => bus.bus_no === selectedBus)) throw new UserError(`Bus ${selectedBus} is not active or does not exist.`, 404);
     const buses = selectedBus ? active.filter((bus) => bus.bus_no === selectedBus) : active;
     const days = Array.from({ length: dayCount }, (_, index) => L.addDays(from, index));
-    const rows = days.flatMap((reportDate) => {
+    const allRows = days.flatMap((reportDate) => {
       const reports = d.dailyReports.filter((report) => report.report_date === reportDate);
       const trips = d.trips.filter((trip) => trip.trip_date === reportDate).sort((a, b) => String(a.actual_start).localeCompare(String(b.actual_start)));
       return buses.map((bus) => {
@@ -272,7 +272,13 @@ export function createService(storage, { readBill = null, today = localToday, us
         };
       });
     });
+    // Optional filters on the rows (the summary then covers just those rows).
+    const { status = '', late = '', extra = '' } = filters || {};
+    const rows = allRows.filter((row) => (!status || row.status === status)
+      && (late !== 'with' || row.late_trips > 0) && (late !== 'none' || row.late_trips === 0)
+      && (extra !== 'over' || row.extra_km > 0) && (extra !== 'within' || row.extra_km === 0));
     return {
+      filters: { status, late, extra },
       from,
       to,
       bus_no: selectedBus,

@@ -176,16 +176,16 @@ async function viewFleet() {
 
 async function viewDaily(range = '') {
   const todayDate = new Date().toLocaleDateString('en-CA');
-  const [rangePart = '', busPart = ''] = range ? range.split('!') : [];
+  const [rangePart = '', busPart = '', statusPart = '', latePart = '', extraPart = ''] = range ? range.split('!') : [];
   const [fromDate = todayDate, toDate = todayDate] = rangePart ? rangePart.split('~') : [];
   const selectedBus = busPart;
   const [report, lists] = await Promise.all([
-    api(`/api/reports/daily?start_date=${encodeURIComponent(fromDate)}&end_date=${encodeURIComponent(toDate)}&bus_no=${encodeURIComponent(selectedBus)}`),
+    api(`/api/reports/daily?start_date=${encodeURIComponent(fromDate)}&end_date=${encodeURIComponent(toDate)}&bus_no=${encodeURIComponent(selectedBus)}&status=${encodeURIComponent(statusPart)}&late=${encodeURIComponent(latePart)}&extra=${encodeURIComponent(extraPart)}`),
     getLists(true),
   ]);
   main.innerHTML = `
     <div class="topbar"><div><h1>Daily bus reports</h1><p class="sub">One row per bus per calendar day · inclusive date range, up to 366 days</p></div></div>
-    <form class="report-filter" id="daily-filter"><label for="report-bus">Bus</label><select id="report-bus"><option value="">All buses</option>${lists.buses.map((bus) => `<option value="${esc(bus.bus_no)}" ${bus.bus_no === selectedBus ? 'selected' : ''}>${esc(bus.label)}</option>`).join('')}</select><label for="report-from">From</label><input id="report-from" type="date" max="${lists.today}" value="${esc(report.from)}" required><label for="report-to">To</label><input id="report-to" type="date" max="${lists.today}" value="${esc(report.to)}" required><button class="btn" type="submit">View report</button></form>
+    <form class="report-filter" id="daily-filter"><label for="report-bus">Bus</label><select id="report-bus"><option value="">All buses</option>${lists.buses.map((bus) => `<option value="${esc(bus.bus_no)}" ${bus.bus_no === selectedBus ? 'selected' : ''}>${esc(bus.label)}</option>`).join('')}</select><label for="report-from">From</label><input id="report-from" type="date" max="${lists.today}" value="${esc(report.from)}" required><label for="report-to">To</label><input id="report-to" type="date" max="${lists.today}" value="${esc(report.to)}" required><label for="report-status">Report status</label><select id="report-status">${[['', 'All'], ['On time', 'On time'], ['Late', 'Late'], ['Not reported', 'Not reported']].map(([v, l]) => `<option value="${v}" ${v === statusPart ? 'selected' : ''}>${l}</option>`).join('')}</select><label for="report-late">Late trips</label><select id="report-late">${[['', 'All'], ['with', 'With late trips'], ['none', 'No late trips']].map(([v, l]) => `<option value="${v}" ${v === latePart ? 'selected' : ''}>${l}</option>`).join('')}</select><label for="report-extra">Extra km</label><select id="report-extra">${[['', 'All'], ['over', 'Over plan'], ['within', 'Within plan']].map(([v, l]) => `<option value="${v}" ${v === extraPart ? 'selected' : ''}>${l}</option>`).join('')}</select><button class="btn" type="submit">View report</button></form>
     <div class="strip">
       <div><div class="n">${report.summary.reported_bus_days}/${report.summary.total_bus_days}</div><div class="d">Bus-days reported</div></div>
       <div><div class="n" style="color:var(--warn)">${report.summary.missing_report_days}</div><div class="d">Bus-days without reports</div></div>
@@ -265,7 +265,7 @@ async function viewDaily(range = '') {
       toast('Choose a valid range: From must be on or before To.');
       return;
     }
-    location.hash = `#daily/${encodeURIComponent(`${start}~${end}!${bus}`)}`;
+    location.hash = `#daily/${encodeURIComponent(`${start}~${end}!${bus}!${$('#report-status').value}!${$('#report-late').value}!${$('#report-extra').value}`)}`;
   });
   document.querySelectorAll('.trip-edit').forEach((btn) => btn.addEventListener('click', () => {
     const bus = report.buses.find((b) => b.trips.some((t) => t.trip_id === btn.dataset.trip));
