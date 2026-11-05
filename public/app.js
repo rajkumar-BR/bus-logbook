@@ -503,7 +503,7 @@ async function viewBus(busNo) {
             ${[['all', 'All'], ['breakdown', 'Breakdowns'], ['repair', 'Repairs'], ['service', 'Scheduled service'], ['inspection', 'Inspections']].map(([k, l], i) => `<button class="fbtn" aria-pressed="${i === 0}" data-f="${k}">${l}</button>`).join('')}
           </div></div>
         ${d.entries.length ? `<ol class="timeline" id="timeline">${d.entries.map(eventItem).join('')}</ol><p class="hint" id="tl-empty" style="padding:0 16px 16px" hidden>No entries of this type.</p>`
-          : `<div class="empty"><b>No entries yet</b><span>Enter the first bill for this bus.</span><a class="btn" href="#new/${encodeURIComponent(b.bus_no)}">Enter a bill</a></div>`}
+          : `<div class="empty"><b>No entries yet</b><span>Use "Enter a bill for this bus" above to add the first one.</span></div>`}
         ${d.voided.length ? `<details class="removed"><summary>Removed entries (${d.voided.length})</summary><p class="hint">These no longer count in costs or repeat checks. They are kept here, with the reason, for the record.</p><ul>${d.voided.map((v) => `<li><b>${fullDate(v.date_in)}</b> · ${esc(v.title)} · ${inr(v.total_cost)} <span class="mono hint">${esc(v.entry_id)}</span><br><span class="hint">Removed${v.removed_by ? ` by ${esc(v.removed_by)}` : ''}${v.removed_at ? ` on ${esc(v.removed_at.slice(0, 10))}` : ''}: ${esc(v.reason)}</span></li>`).join('')}</ul></details>` : ''}
       </div>
       <div class="right">
