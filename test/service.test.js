@@ -325,7 +325,7 @@ test('new tyres are added as spares or fitted straight onto a bus', async () => 
   await assert.rejects(service.addTyres({ tyre_nos: '' }), /at least one/);
   await assert.rejects(service.addTyres({ fitted: { bus_no: '01', date: '2026-10-20', odometer: '', positions: { 'Front left': 'X1' } } }), /odometer/);
   const r = await service.addTyres({ tyre_nos: 'S1\nS2', condition: 'New', fitted: { bus_no: '01', date: '2026-10-20', odometer: 5000, positions: { 'Front left': 'X1', 'Front right': 'X2' } } });
-  assert.deepEqual(r, { added: 4, fitted: 2, spares: 2 });
+  assert.deepEqual(r, { added: 4, fitted: 2, spares: 2, expense_saved: false });
   await assert.rejects(service.addTyres({ fitted: { bus_no: '01', date: '2026-10-20', odometer: 5000, positions: { 'Front left': 'X9' } } }), /already has a tyre/);
   await assert.rejects(service.addTyres({ tyre_nos: 'S1' }), /Already in the tyre list/);
   const by = Object.fromEntries((await service.getTyres()).tyres.map((x) => [x.tyre_no, x]));
@@ -484,4 +484,29 @@ test('a retread bill is optional; when given it is kept on the retread and on th
   assert.equal(by.B.retreads[0].bill_url, '/files/Bills/Tyre retreads/2026-10-11 tyre B Green.pdf');
   const entries = (await service.getBus('01')).entries;
   assert.deepEqual(entries.map((e) => [e.total_cost, e.bill_url]).sort(), [[1000, ''], [1200, '/files/Bills/Tyre retreads/2026-10-11 tyre B Green.pdf']]);
+});
+
+test('a new tyre cost is charged to the bus it is first fitted on', async () => {
+  const storage = memoryStorage({ Buses: [{ bus_no: '01', active: true }, { bus_no: '02', active: true }] });
+  const service = createService(storage, { today: () => '2026-10-23', user: 'test' });
+  await assert.rejects(service.addTyres({ tyre_nos: 'S1', cost_each: '-5' }), /tyre cost/);
+  // two tyres fitted on bus 1 at 9,000 each: 18,000 on that day's expenses, and a line in its history for each
+  const r = await service.addTyres({ condition: 'New', cost_each: 9000, bought_on: '2026-10-15', tyre_nos: 'S1', fitted: { bus_no: '01', date: '2026-10-20', odometer: 5000, positions: { 'Front left': 'X1', 'Front right': 'X2' } } });
+  assert.equal(r.expense_saved, true);
+  assert.equal((await service.getDailyReport('2026-10-20', '2026-10-20', '01')).summary.expenses, 18000);
+  const bus1 = await service.getBus('01');
+  assert.deepEqual(bus1.entries.map((e) => [e.kind, e.total_cost]), [['New tyre', 9000], ['New tyre', 9000]]);
+  assert.equal(bus1.facts.spent_year, 18000);
+  // the spare S1 has a cost but no bus yet; it is charged to the bus that first gets it
+  let by = Object.fromEntries((await service.getTyres()).tyres.map((x) => [x.tyre_no, x]));
+  assert.deepEqual([by.S1.cost, by.S1.cost_bus, by.S1.bought_on], [9000, '', '2026-10-15']);
+  await service.moveTyres({ date: '2026-10-22', odometers: { '02': 100 }, moves: [{ tyre_no: 'S1', to: 'bus', bus_no: '02', position: 'Front left' }] });
+  assert.equal((await service.getDailyReport('2026-10-22', '2026-10-22', '02')).summary.expenses, 9000);
+  assert.equal((await service.getBus('02')).entries.length, 1);
+  // sending it away and fitting it back is not charged again
+  await service.moveTyres({ date: '2026-10-23', odometers: { '02': 120 }, moves: [{ tyre_no: 'S1', to: 'In repair' }] });
+  await service.moveTyres({ date: '2026-10-23', odometers: { '02': 120 }, moves: [{ tyre_no: 'S1', to: 'bus', bus_no: '02', position: 'Front left' }] });
+  assert.equal((await service.getBus('02')).entries.length, 1);
+  by = Object.fromEntries((await service.getTyres()).tyres.map((x) => [x.tyre_no, x]));
+  assert.equal(by.S1.cost_bus, '02');
 });

@@ -56,6 +56,7 @@ export const TABS = {
   Tyres: [
     ['school_id', 'text'], ['tyre_no', 'text'], ['make', 'text'], ['condition', 'text'],
     ['km_before', 'number'], ['status', 'text'], ['notes', 'text'],
+    ['cost', 'number'], ['bought_on', 'date'], ['cost_bus', 'text'],
   ],
   'Tyre fitments': [
     ['school_id', 'text'], ['fitment_id', 'text'], ['tyre_no', 'text'], ['bus_no', 'text'], ['position', 'text'],

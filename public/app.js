@@ -11,7 +11,7 @@ const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
 const kmText = (n) => (n === null || n === undefined || n === '' ? '—' : `${Number(n).toLocaleString('en-IN')} km`);
 const fullDate = (d) => (d ? `${Number(d.slice(8, 10))} ${MONTHS[Number(d.slice(5, 7)) - 1]} ${d.slice(0, 4)}` : '—');
 const dayMonth = (d) => (d ? `${Number(d.slice(8, 10))} ${MONTHS[Number(d.slice(5, 7)) - 1]}` : '');
-const kindKey = (k) => ({ Breakdown: 'breakdown', Repair: 'repair', 'Scheduled service': 'service', Inspection: 'inspection', 'Tyre retread': 'tyre' }[k] || 'inspection');
+const kindKey = (k) => ({ Breakdown: 'breakdown', Repair: 'repair', 'Scheduled service': 'service', Inspection: 'inspection', 'Tyre retread': 'tyre', 'New tyre': 'tyre' }[k] || 'inspection');
 const STATUS_PILL = { 'On route': 'ok', 'In workshop': 'crit', 'Out of service': 'warn' };
 const pill = (status) => `<span class="pill ${STATUS_PILL[status] || 'warn'}"><i></i>${esc(status)}</span>`;
 const REPEAT_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 12a8 8 0 0 1 14-5.3M20 12a8 8 0 0 1-14 5.3"/><path d="M18 3v4h-4M6 21v-4h4"/></svg>';
@@ -61,10 +61,13 @@ async function getLists(force = false) {
   return listsCache;
 }
 
+// Daily report, Tyre report and Repeat repairs live under one "Reports" item in the menu; these tabs move between them.
+const reportTabs = (active) => `<nav class="rtabs" aria-label="Reports">${[['daily', 'Daily report'], ['tyrereport', 'Tyre report'], ['repeats', 'Repeat repairs']].map(([k, l]) => `<a href="#${k}" ${k === active ? 'aria-current="page"' : ''}>${l}</a>`).join('')}</nav>`;
+
 // ---------- router
 
 const views = { fleet: viewFleet, daily: viewDaily, bus: viewBus, repeats: viewRepeats, new: viewNew, correct: viewCorrect, buses: viewBuses, import: viewImport, editbus: viewEditBus, changelog: viewChangeLog, tyres: viewTyres, tyrereport: viewTyreReport };
-const NAV_FOR = { fleet: '#fleet', daily: '#daily', bus: '#fleet', repeats: '#repeats', new: '#new', correct: '#new', buses: '#buses', import: '#import', editbus: '#fleet', changelog: '#changelog', tyres: '#tyres', tyrereport: '#tyrereport' };
+const NAV_FOR = { fleet: '#fleet', daily: '#daily', bus: '#fleet', repeats: '#daily', new: '#new', correct: '#new', buses: '#buses', import: '#import', editbus: '#fleet', changelog: '#changelog', tyres: '#tyres', tyrereport: '#daily' };
 
 async function router() {
   const [name, arg] = location.hash.slice(1).split('/');
@@ -137,7 +140,7 @@ function serviceCell(s, status) {
 async function viewFleet() {
   const d = await api('/api/fleet');
   const head = `<div class="topbar"><div><h1>Fleet today</h1><p class="sub">${fullDate(d.today)} · click a bus to open its full history</p></div>
-    <div class="head-actions"><a class="btn" href="#new">Enter a bill</a></div></div>`;
+    <div class="head-actions"><a class="btn" href="#new">Enter a bus repair bill</a></div></div>`;
   if (!d.buses.length) {
     main.innerHTML = `${head}<div class="panel empty"><b>No buses yet</b><span>Add your buses first, then enter bills against them.</span><a class="btn" href="#buses">Add buses</a></div>`;
     return;
@@ -184,19 +187,18 @@ async function viewDaily(range = '') {
     getLists(true),
   ]);
   main.innerHTML = `
-    <div class="topbar"><div><h1>Daily bus reports</h1><p class="sub">One row per bus per calendar day · inclusive date range, up to 366 days</p></div></div>
-    <form class="report-filter" id="daily-filter"><div class="fgroup"><label for="report-bus">Bus</label><select id="report-bus"><option value="">All buses</option>${lists.buses.map((bus) => `<option value="${esc(bus.bus_no)}" ${bus.bus_no === selectedBus ? 'selected' : ''}>${esc(bus.label)}</option>`).join('')}</select></div><div class="fgroup"><label for="report-from">From</label><input id="report-from" type="date" max="${lists.today}" value="${esc(report.from)}" required></div><div class="fgroup"><label for="report-to">To</label><input id="report-to" type="date" max="${lists.today}" value="${esc(report.to)}" required></div><div class="fgroup"><label for="report-status">Report status</label><select id="report-status">${[['', 'All'], ['On time', 'On time'], ['Late', 'Late'], ['Not reported', 'Not reported']].map(([v, l]) => `<option value="${v}" ${v === statusPart ? 'selected' : ''}>${l}</option>`).join('')}</select></div><div class="fgroup"><label for="report-late">Late trips</label><select id="report-late">${[['', 'All'], ['with', 'With late trips'], ['none', 'No late trips']].map(([v, l]) => `<option value="${v}" ${v === latePart ? 'selected' : ''}>${l}</option>`).join('')}</select></div><div class="fgroup"><label for="report-extra">Extra km</label><select id="report-extra">${[['', 'All'], ['over', 'Over plan'], ['within', 'Within plan']].map(([v, l]) => `<option value="${v}" ${v === extraPart ? 'selected' : ''}>${l}</option>`).join('')}</select></div><button class="btn" type="submit">View report</button></form>
+    ${reportTabs('daily')}<div class="topbar"><div><h1>Daily bus reports</h1><p class="sub">One row per bus per calendar day · inclusive date range, up to 366 days</p></div></div>
+    <form class="report-filter" id="daily-filter"><div class="fgroup"><label for="report-bus">Bus</label><select id="report-bus"><option value="">All buses</option>${lists.buses.map((bus) => `<option value="${esc(bus.bus_no)}" ${bus.bus_no === selectedBus ? 'selected' : ''}>${esc(bus.label)}</option>`).join('')}</select></div><div class="fgroup"><label for="report-from">From</label><input id="report-from" type="date" max="${lists.today}" value="${esc(report.from)}" required></div><div class="fgroup"><label for="report-to">To</label><input id="report-to" type="date" max="${lists.today}" value="${esc(report.to)}" required></div><div class="fgroup"><label for="report-status">Report status</label><select id="report-status">${[['', 'All'], ['On time', 'On time'], ['Late', 'Late'], ['Not reported', 'Not reported']].map(([v, l]) => `<option value="${v}" ${v === statusPart ? 'selected' : ''}>${l}</option>`).join('')}</select></div><div class="fgroup"><label for="report-late">Morning late trips</label><select id="report-late">${[['', 'All'], ['with', 'With late morning trips'], ['none', 'No late morning trips']].map(([v, l]) => `<option value="${v}" ${v === latePart ? 'selected' : ''}>${l}</option>`).join('')}</select></div><div class="fgroup"><label for="report-extra">Extra km</label><select id="report-extra">${[['', 'All'], ['over', 'Over plan'], ['within', 'Within plan']].map(([v, l]) => `<option value="${v}" ${v === extraPart ? 'selected' : ''}>${l}</option>`).join('')}</select></div><button class="btn" type="submit">View report</button></form>
     <div class="strip">
       <div><div class="n">${report.summary.reported_bus_days}/${report.summary.total_bus_days}</div><div class="d">Bus-days reported</div></div>
-      <div><div class="n" style="color:var(--warn)">${report.summary.missing_report_days}</div><div class="d">Bus-days without reports</div></div>
-      <div><div class="n" style="color:var(--crit)">${report.summary.late_buses}</div><div class="d">Buses with late trips</div></div>
+      <div><div class="n" style="color:var(--crit)">${report.summary.late_buses}</div><div class="d">Buses late in the morning</div></div>
       <div><div class="n">${kmText(report.summary.extra_km)}</div><div class="d">Extra km over plan</div></div>
       <div><div class="n">${inr(report.summary.income_collected)}</div><div class="d">Income collected</div></div>
       <div><div class="n">${inr(report.summary.expenses)}</div><div class="d">Daily expenses</div></div>
     </div>
     <div class="panel report-panel">
       <div class="panel-h"><h2>${selectedBus ? `Bus ${esc(selectedBus)} daily totals` : 'Daily totals by bus'} · ${fullDate(report.from)} to ${fullDate(report.to)}</h2><span class="hint">Net = income collected − expenses · missing reports include holidays; Sundays are not listed</span></div>
-      <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Bus / driver</th><th>Report status</th><th>Income</th><th>Expenses</th><th>Net</th><th>Trips logged</th><th>Late trips</th><th>Extra km</th></tr></thead>
+      <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Bus / driver</th><th>Report status</th><th>Income</th><th>Expenses</th><th>Net</th><th>Trips logged</th><th>Morning late trips</th><th>Extra km</th></tr></thead>
       <tbody>${report.buses.map((bus) => `<tr>
         <td>${fullDate(bus.report_date)}</td><td><button class="text-link" data-go="#bus/${encodeURIComponent(bus.bus_no)}">Bus ${esc(bus.bus_no)}</button><div class="hint">${esc(bus.driver_name || 'Driver not recorded')}</div></td>
         <td><span class="report-status ${bus.status === 'On time' ? 'ontime' : bus.status === 'Late' ? 'late' : 'missing'}">${esc(bus.status)}</span></td>
@@ -439,7 +441,7 @@ function eventItem(e) {
   const links = [
     e.bill_url ? `<a href="${esc(e.bill_url)}" target="_blank" rel="noopener">View bill</a>` : '<span class="hint">No bill attached</span>',
     ...e.photo_urls.map((u, i) => `<a href="${esc(u)}" target="_blank" rel="noopener">Photo ${i + 1}</a>`),
-    ...(e.kind === 'Tyre retread' ? [] : [`<button type="button" data-go="#correct/${encodeURIComponent(e.entry_id)}">Correct this entry</button>`]),
+    ...(['Tyre retread', 'New tyre'].includes(e.kind) ? [] : [`<button type="button" data-go="#correct/${encodeURIComponent(e.entry_id)}">Correct this entry</button>`]),
     `<button type="button" class="danger" data-void="${esc(e.entry_id)}">Remove entry</button>`,
   ];
   return `<li class="ev" data-kind="${k}">
@@ -454,7 +456,7 @@ function eventItem(e) {
       </dl>
       ${e.between ? `<div class="between">Repairs since the previous service${e.between.since ? ` (${fullDate(e.between.since)})` : ''}: <b>${inr(e.between.total)}</b> across ${e.between.jobs} job${e.between.jobs === 1 ? '' : 's'}</div>` : ''}
       <div class="ev-meta"><span class="mono">${kmText(e.odometer_km)}</span>${e.workshop ? `<span>${esc(e.workshop)}${e.bill_no ? ` · bill ${esc(e.bill_no)}` : ''}</span>` : ''}<span>${inr(e.total_cost)}</span>
-        ${e.kind === 'Tyre retread' ? '' : `<span>${e.date_out ? `Off road: ${e.days_off_road === 0 ? 'same day' : `${e.days_off_road} day${e.days_off_road === 1 ? '' : 's'}`}` : 'Still in workshop'}</span>`}
+        ${['Tyre retread', 'New tyre'].includes(e.kind) ? '' : `<span>${e.date_out ? `Off road: ${e.days_off_road === 0 ? 'same day' : `${e.days_off_road} day${e.days_off_road === 1 ? '' : 's'}`}` : 'Still in workshop'}</span>`}
         ${e.route_name ? `<span>Route: ${esc(e.route_name)}</span>` : ''}<span class="mono">${esc(e.entry_id)}</span></div>
       <div class="ev-links">${links.join('')}</div>
     </div></li>`;
@@ -492,7 +494,7 @@ async function viewBus(busNo) {
       <div><h1>Bus ${esc(b.bus_no)}${b.route ? ` · ${esc(b.route)}` : ''}</h1>
         <p class="sub">${esc([b.make_model, b.year, b.seats ? `${b.seats} seats` : '', b.reg_no, b.driver_name ? `Driver ${b.driver_name}` : ''].filter(Boolean).join(' · '))}</p>
         <div style="margin-top:6px">${pill(b.status)}${b.active === false ? ' <span class="hint">Retired: not shown in the fleet</span>' : ''}</div></div>
-      <div class="head-actions"><a class="btn" href="#new/${encodeURIComponent(b.bus_no)}">Enter a bill for this bus</a> <a class="btn ghost" href="#editbus/${encodeURIComponent(b.bus_no)}">Edit bus</a></div>
+      <div class="head-actions"><a class="btn" href="#new/${encodeURIComponent(b.bus_no)}">Enter a repair bill for this bus</a> <a class="btn ghost" href="#editbus/${encodeURIComponent(b.bus_no)}">Edit bus</a></div>
     </div>
     <div class="facts">${facts.map(([k, v]) => `<div><div class="label">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join('')}</div>
     ${d.tyreHistory.length ? `<div class="panel report-panel"><div class="panel-h"><h2>Tyre replacement history</h2><span class="hint">Distance from each recorded fitment to its next recorded replacement</span></div><div class="tbl-wrap"><table><thead><tr><th>Tyre / position</th><th>Changed on</th><th>Odometer at change</th><th>Km survived</th><th>Replaced on</th></tr></thead><tbody>${d.tyreHistory.map((tyre) => `<tr><td>${esc(tyre.part_name)}${tyre.position ? `<div class="hint">${esc(tyre.position)}</div>` : ''}</td><td>${fullDate(tyre.date)}</td><td class="mono">${kmText(tyre.odometer_km)}</td><td class="mono">${tyre.km_survived === null ? '<span class="hint">Awaiting next recorded change</span>' : kmText(tyre.km_survived)}</td><td>${fullDate(tyre.replaced_on)}</td></tr>`).join('')}</tbody></table></div></div>` : ''}
@@ -500,10 +502,10 @@ async function viewBus(busNo) {
       <div class="panel">
         <div class="panel-h"><h2>Service history</h2>
           <div class="filters" id="ev-filters">
-            ${[['all', 'All'], ['breakdown', 'Breakdowns'], ['repair', 'Repairs'], ['service', 'Scheduled service'], ['inspection', 'Inspections'], ['tyre', 'Tyre retreads']].map(([k, l], i) => `<button class="fbtn" aria-pressed="${i === 0}" data-f="${k}">${l}</button>`).join('')}
+            ${[['all', 'All'], ['breakdown', 'Breakdowns'], ['repair', 'Repairs'], ['service', 'Scheduled service'], ['inspection', 'Inspections'], ['tyre', 'Tyres']].map(([k, l], i) => `<button class="fbtn" aria-pressed="${i === 0}" data-f="${k}">${l}</button>`).join('')}
           </div></div>
         ${d.entries.length ? `<ol class="timeline" id="timeline">${d.entries.map(eventItem).join('')}</ol><p class="hint" id="tl-empty" style="padding:0 16px 16px" hidden>No entries of this type.</p>`
-          : `<div class="empty"><b>No entries yet</b><span>Use "Enter a bill for this bus" above to add the first one.</span></div>`}
+          : `<div class="empty"><b>No entries yet</b><span>Use "Enter a repair bill for this bus" above to add the first one.</span></div>`}
         ${d.voided.length ? `<details class="removed"><summary>Removed entries (${d.voided.length})</summary><p class="hint">These no longer count in costs or repeat checks. They are kept here, with the reason, for the record.</p><ul>${d.voided.map((v) => `<li><b>${fullDate(v.date_in)}</b> · ${esc(v.title)} · ${inr(v.total_cost)} <span class="mono hint">${esc(v.entry_id)}</span><br><span class="hint">Removed${v.removed_by ? ` by ${esc(v.removed_by)}` : ''}${v.removed_at ? ` on ${esc(v.removed_at.slice(0, 10))}` : ''}: ${esc(v.reason)}</span></li>`).join('')}</ul></details>` : ''}
       </div>
       <div class="right">
@@ -575,7 +577,7 @@ async function viewRepeats() {
   const d = await api('/api/repeats');
   const level = (v) => Math.min(v, 4);
   main.innerHTML = `
-    <div class="topbar"><div><h1>Repeat repairs</h1><p class="sub">Which buses keep failing, and on which part · last 12 months</p></div></div>
+    ${reportTabs('repeats')}<div class="topbar"><div><h1>Repeat repairs</h1><p class="sub">Which buses keep failing, and on which part · last 12 months</p></div></div>
     ${d.matrix.length ? `
     <div class="panel">
       <div class="panel-h"><h2>Repairs by bus and system</h2>
@@ -604,7 +606,7 @@ async function viewRepeats() {
   heat.addEventListener('mouseleave', () => { tip.hidden = true; });
 }
 
-// ---------- Enter a bill / correct an entry
+// ---------- Enter a bus repair bill / correct an entry
 
 function viewNew(busNo) { return entryForm({ bus_no: busNo }); }
 
@@ -627,13 +629,13 @@ function partRow(p = {}) {
 async function entryForm(e, correctsId = null) {
   const lists = await getLists(true);
   if (!lists.buses.length) {
-    main.innerHTML = '<div class="topbar"><h1>Enter a bill</h1></div><div class="panel empty"><b>Add a bus first</b><span>Bills are always entered against a bus.</span><a class="btn" href="#buses">Add buses</a></div>';
+    main.innerHTML = '<div class="topbar"><h1>Enter a bus repair bill</h1></div><div class="panel empty"><b>Add a bus first</b><span>Bills are always entered against a bus.</span><a class="btn" href="#buses">Add buses</a></div>';
     return;
   }
   const v = (k) => esc(e[k] ?? '');
   const kind = e.kind || 'Repair';
   main.innerHTML = `
-    <div class="topbar"><div><h1>${correctsId ? `Correct entry ${esc(correctsId)}` : 'Enter a service or repair'}</h1>
+    <div class="topbar"><div><h1>${correctsId ? `Correct entry ${esc(correctsId)}` : 'Enter a bus repair bill'}</h1>
       <p class="sub">${correctsId ? 'Fix any mistakes and save. The original stays in the Change log.' : 'From the bill and details the driver hands in'}</p></div></div>
     <form class="panel form" id="entryform" novalidate>
       <div class="error full field" id="form-error" hidden></div>
@@ -917,6 +919,8 @@ async function viewTyres() {
         <div class="field"><label for="at-make">Make</label><input id="at-make" placeholder="e.g. MRF, Apollo"></div>
         <div class="field"><label for="at-cond">Condition</label><select id="at-cond"><option>New</option><option>Retreaded</option><option selected>Unknown</option></select></div>
         <div class="field"><label for="at-km">Km already run (if known)</label><input id="at-km" inputmode="numeric" placeholder="0"></div>
+        <div class="field"><label for="at-cost">Cost per tyre (₹)</label><input id="at-cost" inputmode="decimal" placeholder="optional"></div>
+        <div class="field"><label for="at-bought">Bought on</label><input id="at-bought" type="date" max="${esc(data.today)}"></div>
         <div class="field" style="grid-column:1/-1"><label for="at-bus">Fit on a bus</label><select id="at-bus"><option value="">No, add as spares only</option>${busOptions}</select></div>
         <div id="at-fit" style="grid-column:1/-1;display:none;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px">
           <div class="field"><label for="at-date">Fitted on</label><input id="at-date" type="date" max="${esc(data.today)}" value="${esc(data.today)}"></div>
@@ -1043,14 +1047,14 @@ async function viewTyres() {
   $('#add-tyres').addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const err = $('#at-error'); err.hidden = true;
-    const body = { tyre_nos: $('#at-bus').value ? '' : $('#at-nos').value, make: $('#at-make').value, condition: $('#at-cond').value, km_before: $('#at-km').value };
+    const body = { tyre_nos: $('#at-bus').value ? '' : $('#at-nos').value, make: $('#at-make').value, condition: $('#at-cond').value, km_before: $('#at-km').value, cost_each: $('#at-cost').value, bought_on: $('#at-bought').value };
     if ($('#at-bus').value) {
       body.fitted = { bus_no: $('#at-bus').value, date: $('#at-date').value, odometer: $('#at-odo').value, positions: {} };
       document.querySelectorAll('#at-fit [data-pos]').forEach((i) => { body.fitted.positions[i.dataset.pos] = i.value; });
     }
     try {
       const r = await postJSON('/api/tyres', body);
-      toast(`Added ${r.added} tyre${r.added === 1 ? '' : 's'}: ${r.fitted} on the bus, ${r.spares} spare.`);
+      toast(`Added ${r.added} tyre${r.added === 1 ? '' : 's'}: ${r.fitted} on the bus, ${r.spares} spare.${r.expense_saved ? ' The cost was added to the bus expenses.' : ''}`);
       router();
     } catch (e) { err.textContent = e.message; err.hidden = false; }
   });
@@ -1068,17 +1072,17 @@ async function viewTyreReport() {
   });
   const retreaded = rows.filter((t) => t.retread_count);
   main.innerHTML = `
-    <div class="topbar"><div><h1>Tyre report</h1><p class="sub">Every tyre on its own, whichever bus it ran on: the km it ran before it was retreaded and the km since</p></div></div>
+    ${reportTabs('tyrereport')}<div class="topbar"><div><h1>Tyre report</h1><p class="sub">Every tyre on its own, whichever bus it ran on: the km it ran before it was retreaded and the km since</p></div></div>
     <div class="panel">
       <div class="panel-h"><h2>Retreaded tyres</h2><span class="hint">Km are measured from each bus's odometer at fitting and at removal. A tyre still on a bus counts up to that bus's latest logged odometer reading</span></div>
-      <div class="tbl-wrap"><table><thead><tr><th>Tyre no.</th><th>Make</th><th>Retreaded on</th><th>Retread company</th><th>Km before retread</th><th>Km after retread</th><th>Where now</th><th>Bill</th></tr></thead><tbody>
-      ${retreaded.map((t) => `<tr><td class="mono">${esc(t.tyre_no)}</td><td>${esc(t.make || '—')}</td><td>${fullDate(t.last.returned_date)}${t.retread_count > 1 ? `<div class="hint">${t.retread_count} retreads, the latest shown</div>` : ''}</td><td>${esc(t.last.company || '—')}</td><td class="mono">${km(t.before)}</td><td class="mono">${km(t.after)}</td><td>${t.status === 'Fitted' ? `Bus ${esc(t.bus_no)} · ${esc(t.position)}` : esc(t.status)}</td><td>${t.last.bill_url ? `<a href="${esc(t.last.bill_url)}" target="_blank" rel="noopener">View bill</a>` : '<span class="hint">—</span>'}</td></tr>`).join('') || '<tr><td colspan="8" class="hint">No tyre has been retreaded yet.</td></tr>'}
+      <div class="tbl-wrap"><table><thead><tr><th>Tyre no.</th><th>Make</th><th>Retreaded on</th><th>Retread company</th><th>Km before retread</th><th>Km after retread</th><th>Bought for</th><th>Retread cost</th><th>Where now</th><th>Bill</th></tr></thead><tbody>
+      ${retreaded.map((t) => `<tr><td class="mono">${esc(t.tyre_no)}</td><td>${esc(t.make || '—')}</td><td>${fullDate(t.last.returned_date)}${t.retread_count > 1 ? `<div class="hint">${t.retread_count} retreads, the latest shown</div>` : ''}</td><td>${esc(t.last.company || '—')}</td><td class="mono">${km(t.before)}</td><td class="mono">${km(t.after)}</td><td class="mono">${t.cost ? inr(t.cost) : '—'}</td><td class="mono">${t.retread_cost ? inr(t.retread_cost) : '—'}</td><td>${t.status === 'Fitted' ? `Bus ${esc(t.bus_no)} · ${esc(t.position)}` : esc(t.status)}</td><td>${t.last.bill_url ? `<a href="${esc(t.last.bill_url)}" target="_blank" rel="noopener">View bill</a>` : '<span class="hint">—</span>'}</td></tr>`).join('') || '<tr><td colspan="10" class="hint">No tyre has been retreaded yet.</td></tr>'}
       </tbody></table></div>
     </div>
     <div class="panel" style="margin-top:18px">
       <div class="panel-h"><h2>Tyres not retreaded yet</h2><span class="hint">Km run so far</span></div>
-      <div class="tbl-wrap"><table><thead><tr><th>Tyre no.</th><th>Make / condition</th><th>Km so far</th><th>Where now</th></tr></thead><tbody>
-      ${rows.filter((t) => !t.retread_count).map((t) => `<tr><td class="mono">${esc(t.tyre_no)}</td><td>${esc([t.make, t.condition].filter(Boolean).join(' · ') || '—')}</td><td class="mono">${km(t.before)}${t.km_before ? `<div class="hint">incl. ${km(t.km_before)} before it was added</div>` : ''}</td><td>${t.status === 'Fitted' ? `Bus ${esc(t.bus_no)} · ${esc(t.position)}` : esc(t.status)}</td></tr>`).join('') || '<tr><td colspan="4" class="hint">No tyres.</td></tr>'}
+      <div class="tbl-wrap"><table><thead><tr><th>Tyre no.</th><th>Make / condition</th><th>Km so far</th><th>Bought for</th><th>Where now</th></tr></thead><tbody>
+      ${rows.filter((t) => !t.retread_count).map((t) => `<tr><td class="mono">${esc(t.tyre_no)}</td><td>${esc([t.make, t.condition].filter(Boolean).join(' · ') || '—')}</td><td class="mono">${km(t.before)}${t.km_before ? `<div class="hint">incl. ${km(t.km_before)} before it was added</div>` : ''}</td><td class="mono">${t.cost ? inr(t.cost) : '—'}${t.bought_on ? `<div class="hint">${fullDate(t.bought_on)}</div>` : ''}</td><td>${t.status === 'Fitted' ? `Bus ${esc(t.bus_no)} · ${esc(t.position)}` : esc(t.status)}</td></tr>`).join('') || '<tr><td colspan="5" class="hint">No tyres.</td></tr>'}
       </tbody></table></div>
     </div>`;
 }

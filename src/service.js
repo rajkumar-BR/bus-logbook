@@ -43,6 +43,8 @@ export function createService(storage, { readBill = null, today = localToday, us
 
   // Written by "Retread came back" so the cost shows in the bus's history and spending. Not a kind that can be chosen on the bill form.
   const TYRE_RETREAD = 'Tyre retread';
+  const NEW_TYRE = 'New tyre'; // the buying cost of a tyre, charged to the bus it is first fitted on
+  const tyreLine = (kind) => kind === TYRE_RETREAD || kind === NEW_TYRE;
   const activeBuses = (d) => d.buses.filter((b) => b.active !== false); // blank counts as active
   const routeName = (d, id) => (d.routes.find((r) => r.route_id === id) || {}).route_name || id || '';
   // A bus can run several trips to different places: show every route it is on today.
@@ -58,6 +60,7 @@ export function createService(storage, { readBill = null, today = localToday, us
     if (e.kind === KINDS.SERVICE) return 'Scheduled service';
     if (e.kind === KINDS.INSPECTION) return 'Inspection';
     if (e.kind === TYRE_RETREAD) return 'Tyre retread';
+    if (e.kind === NEW_TYRE) return 'New tyre';
     if (parts.length) return parts.map((p) => p.part_name).slice(0, 3).join(', ');
     return e.system || e.kind;
   }
@@ -659,6 +662,8 @@ export function createService(storage, { readBill = null, today = localToday, us
         tyre_no: tyre.tyre_no, make: tyre.make || '', condition: tyre.condition || '', notes: tyre.notes || '',
         km_before: before,
         status: open ? 'Fitted' : (tyre.status || 'In stock'),
+        cost: Number(tyre.cost) || 0, bought_on: tyre.bought_on || '', cost_bus: tyre.cost_bus || '',
+        retread_cost: mine.reduce((a, r) => a + (Number(r.cost) || 0), 0),
         retread_count: mine.length, lives, journey,
         retreads: mine.map((r) => ({ returned_date: r.returned_date, company: r.company || '', cost: Number(r.cost) || 0, bus_no: r.bus_no || '', bill_url: storage.fileUrl(r.bill_link) })),
         bus_no: open ? open.bus_no : '', position: open ? open.position : '',
@@ -669,6 +674,11 @@ export function createService(storage, { readBill = null, today = localToday, us
     }).sort((a, b) => a.tyre_no.localeCompare(b.tyre_no));
     return { today: t, positions: TYRE_POSITIONS, places: TYRE_PLACES, buses: activeBuses(d).map((b) => b.bus_no), tyres: rows };
   }
+
+  const tyreCostEntry = (tyre_no, bus_no, date, cost) => ({
+    entry_id: `E-${date}-${bus_no}-NT-${tyre_no}`, bus_no, kind: NEW_TYRE, date_in: date, date_out: date, days_off_road: 0, system: 'Tyres & alignment',
+    problem_reported: `New tyre ${tyre_no} fitted`, total_cost: cost, labour_cost: 0, is_repeat: false, route_at_time: '', record_status: '', entered_by: user, entered_at: localNow(),
+  });
 
   // A tyre sent to the retreader (status 'At retreader') comes back with the same serial number, into the common stock.
   // The cost is booked as an expense of the bus it last ran on.
@@ -730,6 +740,10 @@ export function createService(storage, { readBill = null, today = localToday, us
     const kmBefore = input.km_before === '' || input.km_before == null ? '' : Number(input.km_before);
     if (kmBefore !== '' && (!Number.isFinite(kmBefore) || kmBefore < 0)) throw new UserError('Km already run must be zero or more.');
     const make = String(input.make || '').trim();
+    const costEach = input.cost_each === '' || input.cost_each == null ? 0 : Number(input.cost_each);
+    if (!Number.isFinite(costEach) || costEach < 0) throw new UserError('Enter the tyre cost in rupees.');
+    const boughtOn = String(input.bought_on || '').trim();
+    if (boughtOn && (!/^\d{4}-\d{2}-\d{2}$/.test(boughtOn) || Number.isNaN(Date.parse(`${boughtOn}T00:00:00`)) || boughtOn > today())) throw new UserError('Choose a valid buying date that is not in the future.');
     const date = fit ? String(fit.date || '').trim() : '';
     const odometer = fit ? Number(fit.odometer) : 0;
     if (onBus.length) {
@@ -740,7 +754,7 @@ export function createService(storage, { readBill = null, today = localToday, us
       fit.bus_no = bus.bus_no;
     }
     const now = localNow();
-    return storage.transact((tx) => {
+    const added = await storage.transact((tx) => {
       const have = new Set(tx.read('Tyres').map((x) => x.tyre_no.toLowerCase()));
       const dupes = list.filter((x, i) => have.has(x.toLowerCase()) || list.findIndex((y) => y.toLowerCase() === x.toLowerCase()) !== i);
       if (dupes.length) throw new UserError(`Already in the tyre list: ${[...new Set(dupes)].join(', ')}.`);
@@ -751,7 +765,9 @@ export function createService(storage, { readBill = null, today = localToday, us
         const last = Math.max(0, ...fitments.filter((f) => f.bus_no === fit.bus_no).flatMap((f) => [Number(f.fitted_km) || 0, Number(f.removed_km) || 0]));
         if (odometer < last) throw new UserError(`Bus ${fit.bus_no}'s odometer cannot be less than ${last.toLocaleString('en-IN')}, the last reading recorded for it.`);
       }
-      tx.append('Tyres', list.map((tyre_no) => ({ tyre_no, make, condition, km_before: kmBefore, status: onBus.some((x) => x.tyre_no === tyre_no) ? 'Fitted' : 'In stock', notes: '' })));
+      tx.append('Tyres', list.map((tyre_no) => ({ tyre_no, make, condition, km_before: kmBefore, status: onBus.some((x) => x.tyre_no === tyre_no) ? 'Fitted' : 'In stock', notes: '', cost: costEach || '', bought_on: boughtOn, cost_bus: costEach && onBus.some((x) => x.tyre_no === tyre_no) ? fit.bus_no : '' })));
+      // a new tyre fitted straight onto a bus is charged to that bus now; a spare is charged to the bus it is first fitted on
+      if (costEach > 0) tx.append('Entries', onBus.map((x) => tyreCostEntry(x.tyre_no, fit.bus_no, date, costEach)));
       let n = fitments.length;
       tx.append('Tyre fitments', onBus.map((x) => ({ fitment_id: `F-${String(++n).padStart(4, '0')}-${x.tyre_no}`, tyre_no: x.tyre_no, bus_no: fit.bus_no, position: x.position, fitted_date: date, fitted_km: odometer, removed_date: '', removed_km: '', removed_to: '' })));
       tx.append('Change log', list.map((tyre_no) => {
@@ -760,6 +776,8 @@ export function createService(storage, { readBill = null, today = localToday, us
       }));
       return { added: list.length, fitted: onBus.length, spares: spares.length };
     });
+    if (costEach > 0 && onBus.length) await saveExpense({ bus_no: fit.bus_no, report_date: date, amount: costEach * onBus.length, note: `New tyre${onBus.length === 1 ? '' : 's'}: ${onBus.map((x) => x.tyre_no).join(', ')}` });
+    return { ...added, expense_saved: costEach > 0 && onBus.length > 0 };
   }
 
   // One or more tyres change place on a date: fitted to a bus position, or sent to repair / scrap / stock.
@@ -775,7 +793,8 @@ export function createService(storage, { readBill = null, today = localToday, us
     for (const [bus, km] of Object.entries(input.odometers || {})) if (String(km).trim() !== '') odo[bus] = Number(km);
     const now = localNow();
     const buses = new Set((await load()).buses.filter((b) => b.active !== false).map((b) => b.bus_no));
-    return storage.transact((tx) => {
+    const charges = {};
+    const moved = await storage.transact((tx) => {
       const tyres = tx.read('Tyres');
       const fitments = tx.read('Tyre fitments');
       const open = fitments.filter((f) => !f.removed_date);
@@ -831,6 +850,13 @@ export function createService(storage, { readBill = null, today = localToday, us
       const fresh = [];
       for (const m of moves) {
         if (m.to === 'bus') {
+          // the buying cost of a spare is charged to the bus that first gets it
+          const own = tyres.find((x) => x.tyre_no === m.tyre_no);
+          if (own && Number(own.cost) > 0 && !own.cost_bus) {
+            tx.update('Tyres', (x) => x.tyre_no === m.tyre_no, { cost_bus: m.bus_no });
+            tx.append('Entries', [tyreCostEntry(m.tyre_no, m.bus_no, date, Number(own.cost))]);
+            charges[m.bus_no] = { amount: (charges[m.bus_no]?.amount || 0) + Number(own.cost), tyres: [...(charges[m.bus_no]?.tyres || []), m.tyre_no] };
+          }
           n += 1;
           fresh.push({ fitment_id: `F-${String(n).padStart(4, '0')}-${m.tyre_no}`, tyre_no: m.tyre_no, bus_no: m.bus_no, position: m.position, fitted_date: date, fitted_km: odo[m.bus_no], removed_date: '', removed_km: '', removed_to: '' });
           log.push({ timestamp: now, user, action: 'Fitted', tab: 'Tyres', record_id: m.tyre_no, field: 'fitted', old_value: '', new_value: `Bus ${m.bus_no} ${m.position}` });
@@ -843,6 +869,8 @@ export function createService(storage, { readBill = null, today = localToday, us
       tx.append('Change log', log);
       return { moved: moves.length, taken_off_unlisted: [...closing].filter(([id]) => !moves.some((m) => open.find((x) => x.fitment_id === id)?.tyre_no === m.tyre_no)).length };
     });
+    for (const [bus_no, c] of Object.entries(charges)) await saveExpense({ bus_no, report_date: date, amount: c.amount, note: `New tyre${c.tyres.length === 1 ? '' : 's'}: ${c.tyres.join(', ')}` });
+    return moved;
   }
 
   async function checkRepeat({ bus_no, system, date_in, kind, exclude_entry_id }) {
