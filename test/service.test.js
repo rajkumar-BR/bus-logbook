@@ -510,3 +510,41 @@ test('a new tyre cost is charged to the bus it is first fitted on', async () => 
   by = Object.fromEntries((await service.getTyres()).tyres.map((x) => [x.tyre_no, x]));
   assert.equal(by.S1.cost_bus, '02');
 });
+
+test('daily expenses are the typed expenses plus every bill of that day, and follow a removed bill', async () => {
+  const storage = memoryStorage({ Buses: [{ bus_no: '01', active: true }] });
+  const service = createService(storage, { today: () => '2026-10-23', user: 'test' });
+  await service.saveExpense({ bus_no: '01', report_date: '2026-10-20', amount: 700, note: 'Fuel' });
+  const bill = await service.saveEntry({ bus_no: '01', kind: 'Repair', system: 'Brakes', problem_reported: 'Noise', root_cause: 'Worn pads, replaced', date_in: '2026-10-20', date_out: '2026-10-20', total_cost: 2500 });
+  const day = async () => (await service.getDailyReport('2026-10-20', '2026-10-20', '01')).buses[0];
+  assert.deepEqual([(await day()).expenses, (await day()).bill_expenses], [3200, 2500]);
+  assert.equal((await day()).net_collection, -3200);
+  await service.voidEntry(bill.entry_id, 'Entered against the wrong day');
+  assert.deepEqual([(await day()).expenses, (await day()).bill_expenses], [700, 0]);
+});
+
+test('a tyre cost can be corrected or added later and the bus history and daily expenses follow', async () => {
+  const storage = memoryStorage({ Buses: [{ bus_no: '01', active: true }] });
+  const service = createService(storage, { today: () => '2026-10-23', user: 'test' });
+  await service.addTyres({ tyre_nos: '', fitted: { bus_no: '01', date: '2026-10-10', odometer: 100, positions: { 'Front left': 'A' } } });
+  await service.moveTyres({ date: '2026-10-12', odometers: { '01': 200 }, moves: [{ tyre_no: 'A', to: 'At retreader' }] });
+  await service.returnRetread({ tyre_no: 'A', date: '2026-10-15', company: 'Green', cost: 1000 });
+  const day = async (d) => (await service.getDailyReport(d, d, '01')).buses[0].expenses;
+  assert.equal(await day('2026-10-10'), 0); // no price was given when the tyre was added
+  // the price is entered later: charged to the bus it was first fitted on, on that day
+  assert.deepEqual(await service.updateTyreCosts('A', { cost: 9000, bought_on: '2026-10-05' }), { tyre_no: 'A', changed: 2 });
+  assert.equal(await day('2026-10-10'), 9000);
+  // a typo in the price, and in the retread cost
+  await service.updateTyreCosts('A', { cost: 8500, retreads: [{ returned_date: '2026-10-15', cost: 1200 }] });
+  assert.equal(await day('2026-10-10'), 8500);
+  assert.equal(await day('2026-10-15'), 1200);
+  const bus = await service.getBus('01');
+  assert.equal(bus.facts.spent_year, 8500 + 1200);
+  const tyre = (await service.getTyres()).tyres[0];
+  assert.deepEqual([tyre.cost, tyre.bought_on, tyre.retread_cost, tyre.cost_bus], [8500, '2026-10-05', 1200, '01']);
+  assert.equal((await service.updateTyreCosts('A', { cost: 8500 })).changed, 0);
+  await assert.rejects(service.updateTyreCosts('A', { cost: '-1' }), /zero or more/);
+  await assert.rejects(service.updateTyreCosts('A', { retreads: [{ returned_date: '2026-01-01', cost: 1 }] }), /no such retread/);
+  // both tyre lines are listed in the bus's current spending
+  assert.equal(bus.spending.current.jobs.length, 2);
+});

@@ -123,6 +123,14 @@ The app keeps no data of its own: records are in Postgres and bills and photos a
 - **Render's free plan** sleeps after 15 minutes without traffic (the first request then takes about a minute). Use a paid plan for real use. Do not use Render's free Postgres: it is deleted after 30 days.
 - **Before real customers:** set a strong `SIGNUP_CODE` (or `ALLOW_SIGNUP=false`), and remember emails are not verified and there is no password reset by email yet.
 
+## After the initial data migration
+
+While the existing records are being loaded, some details are left optional. Once the migration is finished, tighten these:
+
+- **Tyre cost must be made mandatory.** "Cost per tyre" (and ideally "Bought on") on the Tyres page → Add tyres is optional today so old tyres can be entered without a price. After the migration it should be required for every new tyre, so each tyre's cost is charged to a bus and shows in that bus's spending and the Tyre report. The same applies to the retread cost and bill on Enter a bill → Tyre repair bill (the bill is optional for now).
+- Planned km, expected times and stops are set per trip under Edit bus → Trip times. Fill them in for every bus; Record a bus day will not save without them. Use "Apply to all days" while filling in past data.
+- Trip photos are optional for now.
+
 ## For developers
 
 ```

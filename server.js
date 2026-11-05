@@ -222,6 +222,7 @@ app.put('/api/trips/:tripId', wrap((req) => req.service.updateTrip(req.params.tr
 app.get('/api/tyres', wrap((req) => req.service.getTyres()));
 app.post('/api/tyres', wrap((req) => req.service.addTyres(req.body || {})));
 app.post('/api/tyres/retread-return', upload.single('bill'), wrap((req) => req.service.returnRetread(req.body || {}, req.file || null)));
+app.put('/api/tyres/:tyreNo/costs', wrap((req) => req.service.updateTyreCosts(req.params.tyreNo, req.body || {})));
 app.post('/api/tyres/move', wrap((req) => req.service.moveTyres(req.body || {})));
 app.get('/api/changelog', wrap((req) => req.service.getChangeLog({ action: String(req.query.action || ''), q: String(req.query.q || ''), page: Number(req.query.page) || 1 })));
 app.get('/api/repeats', wrap((req) => req.service.getRepeats()));

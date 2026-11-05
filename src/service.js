@@ -210,7 +210,7 @@ export function createService(storage, { readBill = null, today = localToday, us
         parts,
         bill_url: storage.fileUrl(e.bill_link),
         photo_urls: String(e.photo_links || '').split(',').map((s) => s.trim()).filter(Boolean).map(storage.fileUrl),
-        between: before ? { since: before.start ? before.start.date_in : null, total: before.total, jobs: before.jobs.length } : null,
+        between: before ? { since: before.start ? before.start.date_in : null, total: before.total, jobs: before.jobs.filter((j) => !tyreLine(j.kind)).length } : null,
       };
     });
     const tyreHistory = L.partHistory(bp.filter((part) => /tyre|tire/i.test(part.part_name)), Object.fromEntries(d.entries.map((entry) => [entry.entry_id, entry])))
@@ -243,7 +243,7 @@ export function createService(storage, { readBill = null, today = localToday, us
       },
       spending: {
         current: { total: spent.total, since: spent.since ? spent.since.date_in : null, jobs: spent.jobs.map((j) => entryTitle(j, bp.filter((p) => p.entry_id === j.entry_id))) },
-        periods: periods.map((p) => ({ from: p.start ? p.start.date_in : null, to: p.end ? p.end.date_in : null, total: p.total, jobs: p.jobs.length })),
+        periods: periods.map((p) => ({ from: p.start ? p.start.date_in : null, to: p.end ? p.end.date_in : null, total: p.total, jobs: p.jobs.filter((j) => !tyreLine(j.kind)).length })),
       },
       findings: f.findings,
       lifeChart: f.lifeChart,
@@ -291,10 +291,10 @@ export function createService(storage, { readBill = null, today = localToday, us
     const selectedBus = String(busNo || '').trim();
     if (selectedBus && !active.some((bus) => bus.bus_no === selectedBus)) throw new UserError(`Bus ${selectedBus} is not active or does not exist.`, 404);
     const buses = selectedBus ? active.filter((bus) => bus.bus_no === selectedBus) : active;
-    // Buses do not run on Sundays, so those days are not listed (unless something was reported on one).
+    // Buses do not run on Sundays, so those days are not listed (unless something was reported or billed on one).
     const isSunday = (date) => new Date(`${date}T00:00:00`).getDay() === 0;
     const days = Array.from({ length: dayCount }, (_, index) => L.addDays(from, index))
-      .filter((date) => !isSunday(date) || d.dailyReports.some((r) => r.report_date === date) || d.trips.some((t) => t.trip_date === date));
+      .filter((date) => !isSunday(date) || d.dailyReports.some((r) => r.report_date === date) || d.trips.some((t) => t.trip_date === date) || d.entries.some((e) => e.date_in === date && Number(e.total_cost) > 0));
     const allRows = days.flatMap((reportDate) => {
       const reports = d.dailyReports.filter((report) => report.report_date === reportDate);
       const trips = d.trips.filter((trip) => trip.trip_date === reportDate).sort((a, b) => (Number(a.trip_number) - Number(b.trip_number)) || (SESSIONS.indexOf(sessionOf(a)) - SESSIONS.indexOf(sessionOf(b))) || String(a.actual_start).localeCompare(String(b.actual_start)));
@@ -319,6 +319,9 @@ export function createService(storage, { readBill = null, today = localToday, us
             timing_status: sessionOf(trip) === 'Evening' ? 'Lateness not checked' : trip.on_time ? 'On time' : `Late by ${trip.late_by_minutes} min`,
           };
         });
+        // Everything spent on the bus that day: what was typed in the daily report, plus the bills entered for that day (repairs, services, tyres)
+        const billExpenses = d.entries.filter((e) => e.bus_no === bus.bus_no && e.date_in === reportDate).reduce((a, e) => a + (Number(e.total_cost) || 0), 0);
+        const typedExpenses = Number(daily?.expenses) || 0;
         const reported = Boolean(daily);
         const lateTrips = busTrips.filter((trip) => !trip.on_time).length;
         return {
@@ -331,8 +334,9 @@ export function createService(storage, { readBill = null, today = localToday, us
           trips_expected: Math.max(1, plans.length),
           late_trips: lateTrips,
           income_collected: Number(daily?.income_collected) || 0,
-          expenses: Number(daily?.expenses) || 0,
-          net_collection: (Number(daily?.income_collected) || 0) - (Number(daily?.expenses) || 0),
+          expenses: typedExpenses + billExpenses,
+          bill_expenses: billExpenses,
+          net_collection: (Number(daily?.income_collected) || 0) - typedExpenses - billExpenses,
           extra_km: busTrips.reduce((sum, trip) => sum + Math.max(0, Number(trip.extra_km) || 0), 0),
           trips: busTrips,
         };
@@ -719,16 +723,59 @@ export function createService(storage, { readBill = null, today = localToday, us
       tx.append('Change log', [{ timestamp: now, user, action: 'Retreaded', tab: 'Tyres', record_id: tyre.tyre_no, field: 'status', old_value: 'At retreader', new_value: `In stock${company ? `, ${company}` : ''}${cost ? `, Rs ${cost}` : ''}` }]);
       return { tyre_no: tyre.tyre_no, bus_no };
     });
-    let expense_saved = false;
-    if (cost > 0 && result.bus_no) {
-      await saveExpense({ bus_no: result.bus_no, report_date: date, amount: cost, note: `Retread of tyre ${result.tyre_no}${company ? ` (${company})` : ''}` });
-      expense_saved = true;
-    }
-    return { ...result, expense_saved };
+    // the cost reaches that day's expenses through the bus history line written above
+    return { ...result, expense_saved: cost > 0 && Boolean(result.bus_no) };
   }
 
   // New tyres enter the system either as spares (common stock) or fitted straight onto a bus.
   // input: { tyre_nos (spares), make, condition, km_before, fitted?: { bus_no, date, odometer, positions: { 'Front left': 'tyre no', ... } } }
+  // Correct what a tyre cost: its buying price and date, and the cost of each retread. The bus history lines follow,
+  // so the bus spending and the day's expenses change with them. A price entered later is charged to the bus the tyre was first fitted on.
+  async function updateTyreCosts(tyreNo, input) {
+    const money = (v, label) => { if (v === '' || v == null) return 0; const n = Number(String(v).replace(/[,₹\s]/g, '')); if (!Number.isFinite(n) || n < 0) throw new UserError(`${label} must be zero or more.`); return n; };
+    const now = localNow();
+    return storage.transact((tx) => {
+      const tyre = tx.read('Tyres').find((x) => x.tyre_no === tyreNo);
+      if (!tyre) throw new UserError(`Tyre ${tyreNo} is not in the tyre list.`, 404);
+      const log = [];
+      const note = (field, before, after) => { if (String(before ?? '') !== String(after ?? '')) log.push({ timestamp: now, user, action: 'Updated', tab: 'Tyres', record_id: tyreNo, field, old_value: String(before ?? ''), new_value: String(after ?? '') }); };
+      const live = (e) => e.record_status !== 'Voided' && e.record_status !== 'Corrected';
+      const lines = () => tx.read('Entries').filter(live);
+      if ('cost' in input) {
+        const cost = money(input.cost, 'The tyre cost');
+        const boughtOn = 'bought_on' in input ? String(input.bought_on || '').trim() : (tyre.bought_on || '');
+        if (boughtOn && (!/^\d{4}-\d{2}-\d{2}$/.test(boughtOn) || Number.isNaN(Date.parse(`${boughtOn}T00:00:00`)) || boughtOn > today())) throw new UserError('Choose a valid buying date that is not in the future.');
+        let costBus = tyre.cost_bus || '';
+        const line = lines().find((e) => e.kind === NEW_TYRE && e.bus_no === costBus && e.problem_reported === `New tyre ${tyreNo} fitted`);
+        if (line) {
+          if (Number(line.total_cost) !== cost) tx.update('Entries', (e) => e.entry_id === line.entry_id, { total_cost: cost });
+        } else if (cost > 0) {
+          const first = tx.read('Tyre fitments').filter((f) => f.tyre_no === tyreNo).sort((a, b) => String(a.fitted_date).localeCompare(String(b.fitted_date)) || String(a.fitment_id).localeCompare(String(b.fitment_id)))[0];
+          if (first) { costBus = first.bus_no; tx.append('Entries', [tyreCostEntry(tyreNo, first.bus_no, first.fitted_date, cost)]); }
+        }
+        note('cost', tyre.cost, cost || '');
+        note('bought_on', tyre.bought_on, boughtOn);
+        tx.update('Tyres', (x) => x.tyre_no === tyreNo, { cost: cost || '', bought_on: boughtOn, cost_bus: costBus });
+      }
+      for (const r of Array.isArray(input.retreads) ? input.retreads : []) {
+        const row = tx.read('Tyre retreads').find((x) => x.tyre_no === tyreNo && x.returned_date === r.returned_date);
+        if (!row) throw new UserError('There is no such retread for this tyre.', 404);
+        const cost = money(r.cost, 'The retread cost');
+        const line = lines().find((e) => e.kind === TYRE_RETREAD && e.bus_no === row.bus_no && e.date_in === row.returned_date && e.problem_reported === `Tyre ${tyreNo} retreaded`);
+        if (line) {
+          if (Number(line.total_cost) !== cost) tx.update('Entries', (e) => e.entry_id === line.entry_id, { total_cost: cost });
+        } else if (cost > 0 && row.bus_no) {
+          tx.append('Entries', [{ ...tyreCostEntry(tyreNo, row.bus_no, row.returned_date, cost), entry_id: `E-${row.returned_date}-${row.bus_no}-RT-${tyreNo}`, kind: TYRE_RETREAD, problem_reported: `Tyre ${tyreNo} retreaded`, workshop: row.company || '' }]);
+        }
+        note(`retread ${row.returned_date} cost`, row.cost, cost || '');
+        tx.update('Tyre retreads', (x) => x.retread_id === row.retread_id, { cost: cost || '' });
+      }
+      if (!log.length) return { tyre_no: tyreNo, changed: 0 };
+      tx.append('Change log', log);
+      return { tyre_no: tyreNo, changed: log.length };
+    });
+  }
+
   async function addTyres(input) {
     const split = (v) => (Array.isArray(v) ? v : String(v || '').split(/[\n,;]+/)).map((x) => String(x).trim()).filter(Boolean);
     const spares = split(input.tyre_nos);
@@ -776,7 +823,6 @@ export function createService(storage, { readBill = null, today = localToday, us
       }));
       return { added: list.length, fitted: onBus.length, spares: spares.length };
     });
-    if (costEach > 0 && onBus.length) await saveExpense({ bus_no: fit.bus_no, report_date: date, amount: costEach * onBus.length, note: `New tyre${onBus.length === 1 ? '' : 's'}: ${onBus.map((x) => x.tyre_no).join(', ')}` });
     return { ...added, expense_saved: costEach > 0 && onBus.length > 0 };
   }
 
@@ -869,8 +915,7 @@ export function createService(storage, { readBill = null, today = localToday, us
       tx.append('Change log', log);
       return { moved: moves.length, taken_off_unlisted: [...closing].filter(([id]) => !moves.some((m) => open.find((x) => x.fitment_id === id)?.tyre_no === m.tyre_no)).length };
     });
-    for (const [bus_no, c] of Object.entries(charges)) await saveExpense({ bus_no, report_date: date, amount: c.amount, note: `New tyre${c.tyres.length === 1 ? '' : 's'}: ${c.tyres.join(', ')}` });
-    return moved;
+    return { ...moved, charged: Object.keys(charges) };
   }
 
   async function checkRepeat({ bus_no, system, date_in, kind, exclude_entry_id }) {
@@ -1238,5 +1283,5 @@ export function createService(storage, { readBill = null, today = localToday, us
     return I.buildTemplate({ kinds: lists.entry_kinds, systems: lists.systems });
   }
 
-  return { getLists, getFleet, getBus, getEntry, getRepeats, getDailyReport, saveDailyReport, saveExpense, setTripTimes, updateTrip, getTyres, addTyres, moveTyres, returnRetread, getTripPlans, checkRepeat, readBillFields, saveEntry, voidEntry, addBus, updateBus, listBuses, getChangeLog, importWorkbook, importTemplate };
+  return { getLists, getFleet, getBus, getEntry, getRepeats, getDailyReport, saveDailyReport, saveExpense, setTripTimes, updateTrip, getTyres, addTyres, moveTyres, returnRetread, updateTyreCosts, getTripPlans, checkRepeat, readBillFields, saveEntry, voidEntry, addBus, updateBus, listBuses, getChangeLog, importWorkbook, importTemplate };
 }

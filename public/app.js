@@ -61,13 +61,16 @@ async function getLists(force = false) {
   return listsCache;
 }
 
+// Enter a bill has two tabs: a bus repair bill and a tyre repair bill.
+const billTabs = (active) => `<nav class="rtabs" aria-label="Bills">${[['new', 'Bus repair bill'], ['tyrebill', 'Tyre repair bill']].map(([k, l]) => `<a href="#${k}" ${k === active ? 'aria-current="page"' : ''}>${l}</a>`).join('')}</nav>`;
+
 // Daily report, Tyre report and Repeat repairs live under one "Reports" item in the menu; these tabs move between them.
 const reportTabs = (active) => `<nav class="rtabs" aria-label="Reports">${[['daily', 'Daily report'], ['tyrereport', 'Tyre report'], ['repeats', 'Repeat repairs']].map(([k, l]) => `<a href="#${k}" ${k === active ? 'aria-current="page"' : ''}>${l}</a>`).join('')}</nav>`;
 
 // ---------- router
 
-const views = { fleet: viewFleet, daily: viewDaily, bus: viewBus, repeats: viewRepeats, new: viewNew, correct: viewCorrect, buses: viewBuses, import: viewImport, editbus: viewEditBus, changelog: viewChangeLog, tyres: viewTyres, tyrereport: viewTyreReport };
-const NAV_FOR = { fleet: '#fleet', daily: '#daily', bus: '#fleet', repeats: '#daily', new: '#new', correct: '#new', buses: '#buses', import: '#import', editbus: '#fleet', changelog: '#changelog', tyres: '#tyres', tyrereport: '#daily' };
+const views = { fleet: viewFleet, daily: viewDaily, bus: viewBus, repeats: viewRepeats, new: viewNew, correct: viewCorrect, buses: viewBuses, import: viewImport, editbus: viewEditBus, changelog: viewChangeLog, tyres: viewTyres, tyrereport: viewTyreReport, tyrebill: viewTyreBill };
+const NAV_FOR = { fleet: '#fleet', daily: '#daily', bus: '#fleet', repeats: '#daily', new: '#new', correct: '#new', buses: '#buses', import: '#import', editbus: '#fleet', changelog: '#changelog', tyres: '#tyres', tyrereport: '#daily', tyrebill: '#new' };
 
 async function router() {
   const [name, arg] = location.hash.slice(1).split('/');
@@ -140,7 +143,7 @@ function serviceCell(s, status) {
 async function viewFleet() {
   const d = await api('/api/fleet');
   const head = `<div class="topbar"><div><h1>Fleet today</h1><p class="sub">${fullDate(d.today)} · click a bus to open its full history</p></div>
-    <div class="head-actions"><a class="btn" href="#new">Enter a bus repair bill</a></div></div>`;
+    <div class="head-actions"><a class="btn" href="#new">Enter a bill</a></div></div>`;
   if (!d.buses.length) {
     main.innerHTML = `${head}<div class="panel empty"><b>No buses yet</b><span>Add your buses first, then enter bills against them.</span><a class="btn" href="#buses">Add buses</a></div>`;
     return;
@@ -194,7 +197,7 @@ async function viewDaily(range = '') {
       <div><div class="n" style="color:var(--crit)">${report.summary.late_buses}</div><div class="d">Buses late in the morning</div></div>
       <div><div class="n">${kmText(report.summary.extra_km)}</div><div class="d">Extra km over plan</div></div>
       <div><div class="n">${inr(report.summary.income_collected)}</div><div class="d">Income collected</div></div>
-      <div><div class="n">${inr(report.summary.expenses)}</div><div class="d">Daily expenses</div></div>
+      <div><div class="n">${inr(report.summary.expenses)}</div><div class="d">Expenses, bills included</div></div>
     </div>
     <div class="panel report-panel">
       <div class="panel-h"><h2>${selectedBus ? `Bus ${esc(selectedBus)} daily totals` : 'Daily totals by bus'} · ${fullDate(report.from)} to ${fullDate(report.to)}</h2><span class="hint">Net = income collected − expenses · missing reports include holidays; Sundays are not listed</span></div>
@@ -202,7 +205,7 @@ async function viewDaily(range = '') {
       <tbody>${report.buses.map((bus) => `<tr>
         <td>${fullDate(bus.report_date)}</td><td><button class="text-link" data-go="#bus/${encodeURIComponent(bus.bus_no)}">Bus ${esc(bus.bus_no)}</button><div class="hint">${esc(bus.driver_name || 'Driver not recorded')}</div></td>
         <td><span class="report-status ${bus.status === 'On time' ? 'ontime' : bus.status === 'Late' ? 'late' : 'missing'}">${esc(bus.status)}</span></td>
-        <td class="mono">${inr(bus.income_collected)}</td><td class="mono">${inr(bus.expenses)}</td><td class="mono">${inr(bus.net_collection)}</td>
+        <td class="mono">${inr(bus.income_collected)}</td><td class="mono">${inr(bus.expenses)}${bus.bill_expenses ? `<div class="hint">incl. ${inr(bus.bill_expenses)} in bills</div>` : ''}</td><td class="mono">${inr(bus.net_collection)}</td>
         <td>${bus.trip_count}/${bus.trips_expected}</td><td>${bus.late_trips}</td><td class="mono">${kmText(bus.extra_km)}</td>
       </tr>`).join('')}</tbody></table></div>
     </div>
@@ -635,6 +638,7 @@ async function entryForm(e, correctsId = null) {
   const v = (k) => esc(e[k] ?? '');
   const kind = e.kind || 'Repair';
   main.innerHTML = `
+    ${correctsId ? '' : billTabs('new')}
     <div class="topbar"><div><h1>${correctsId ? `Correct entry ${esc(correctsId)}` : 'Enter a bus repair bill'}</h1>
       <p class="sub">${correctsId ? 'Fix any mistakes and save. The original stays in the Change log.' : 'From the bill and details the driver hands in'}</p></div></div>
     <form class="panel form" id="entryform" novalidate>
@@ -909,7 +913,13 @@ async function viewTyres() {
       <div class="tyre-filter"><label for="tyre-where">Where now</label><select id="tyre-where"><option value="">All tyres</option><option value="Fitted">Fitted on any bus</option>${data.buses.map((b) => `<option value="bus:${esc(b)}">Bus ${esc(b)}</option>`).join('')}${['In stock', 'In repair', 'At retreader', 'Scrapped'].map((p) => `<option value="${p}">${p}</option>`).join('')}</select><span class="hint" id="tyre-count"></span></div>
       <div class="tbl-wrap"><table><thead><tr><th>Tyre no.</th><th>Make / condition</th><th>Where now</th><th></th></tr></thead><tbody>
       ${data.tyres.map((t, i) => `<tr class="tyre-row" data-status="${esc(t.status)}" data-bus="${esc(t.bus_no)}"><td class="mono">${esc(t.tyre_no)}</td><td>${esc([t.make, t.condition].filter(Boolean).join(' · ') || '—')}${t.retread_count ? `<div class="hint">Retreaded ${t.retread_count} time${t.retread_count === 1 ? '' : 's'}</div>` : ''}</td><td>${where(t)}</td><td><button class="btn ghost tyre-hist" type="button" data-i="${i}">History</button></td></tr>
-        <tr class="tyre-hist-row" id="hist-${i}" hidden><td colspan="4">${t.journey.length ? `<table><thead><tr><th>Where</th><th>From</th><th>Until</th><th>Km</th><th>Km by route</th></tr></thead><tbody>${t.journey.map((s) => s.kind === 'place' ? `<tr class="tyre-place"><td>${esc(s.place)}</td><td>${fullDate(s.from)}</td><td>${s.to ? fullDate(s.to) : 'Now'}</td><td class="mono">—</td><td>—</td></tr>` : `<tr><td>Bus ${esc(s.bus_no)} · ${esc(s.position)}</td><td>${fullDate(s.fitted_date)}<div class="hint">odometer ${Number(s.fitted_km).toLocaleString('en-IN')}</div></td><td>${s.removed_date ? `${fullDate(s.removed_date)}<div class="hint">odometer ${Number(s.removed_km).toLocaleString('en-IN')}${s.removed_to === 'Position changed' ? ' · moved to another wheel' : ''}</div>` : 'Now'}</td><td class="mono">${km(s.km)}<div class="hint">${esc(s.km_from)}</div></td><td>${routesText(s.by_route)}<div class="hint">logged trips: ${km(s.logged_km)}</div></td></tr>`).join('')}</tbody></table>` : '<span class="hint">Never fitted yet.</span>'}</td></tr>`).join('') || '<tr><td colspan="4" class="hint">No tyres yet. Add them below.</td></tr>'}
+        <tr class="tyre-hist-row" id="hist-${i}" hidden><td colspan="4">${t.journey.length ? `<table><thead><tr><th>Where</th><th>From</th><th>Until</th><th>Km</th><th>Km by route</th></tr></thead><tbody>${t.journey.map((s) => s.kind === 'place' ? `<tr class="tyre-place"><td>${esc(s.place)}</td><td>${fullDate(s.from)}</td><td>${s.to ? fullDate(s.to) : 'Now'}</td><td class="mono">—</td><td>—</td></tr>` : `<tr><td>Bus ${esc(s.bus_no)} · ${esc(s.position)}</td><td>${fullDate(s.fitted_date)}<div class="hint">odometer ${Number(s.fitted_km).toLocaleString('en-IN')}</div></td><td>${s.removed_date ? `${fullDate(s.removed_date)}<div class="hint">odometer ${Number(s.removed_km).toLocaleString('en-IN')}${s.removed_to === 'Position changed' ? ' · moved to another wheel' : ''}</div>` : 'Now'}</td><td class="mono">${km(s.km)}<div class="hint">${esc(s.km_from)}</div></td><td>${routesText(s.by_route)}<div class="hint">logged trips: ${km(s.logged_km)}</div></td></tr>`).join('')}</tbody></table>` : '<span class="hint">Never fitted yet.</span>'}
+          <div class="tyre-costs" data-tyre="${esc(t.tyre_no)}"><b>Costs</b>
+            <label>Bought for (₹) <input class="tc-cost" inputmode="decimal" value="${esc(t.cost || '')}"></label>
+            <label>Bought on <input class="tc-date" type="date" max="${esc(data.today)}" value="${esc(t.bought_on)}"></label>
+            ${t.retreads.map((r) => `<label>Retread ${esc(fullDate(r.returned_date))} (₹) <input class="tc-rt" data-date="${esc(r.returned_date)}" inputmode="decimal" value="${esc(r.cost || '')}"></label>`).join('')}
+            <button class="btn ghost tc-save" type="button">Save costs</button>
+            <span class="hint">A price entered here is charged to the bus the tyre was first fitted on, and the bus history and the day's expenses follow</span></div></td></tr>`).join('') || '<tr><td colspan="4" class="hint">No tyres yet. Add them below.</td></tr>'}
       </tbody></table></div>
     </div>
     <form class="panel" id="add-tyres" style="margin-bottom:18px" novalidate>
@@ -941,18 +951,6 @@ async function viewTyres() {
         <div id="mv-odo" style="grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px"></div>
         <div class="btns" style="grid-column:1/-1"><button class="btn" type="submit">Save the change</button></div>
       </div>
-    </form>
-    <form class="panel" id="retread-form" style="margin-bottom:18px" novalidate>
-      <div class="panel-h"><h2>Retread came back</h2><span class="hint">The tyre keeps its number and goes to stock. Fit it on any bus with "Move or swap tyres". The cost is added to the expenses of the bus it came off</span></div>
-      <div class="busform">
-        <div class="error" id="rt-error" style="grid-column:1/-1" hidden></div>
-        <div class="field"><label for="rt-tyre">Tyre</label><select id="rt-tyre" required><option value="">Choose…</option>${data.tyres.filter((t) => t.status === 'At retreader').map((t) => `<option>${esc(t.tyre_no)}</option>`).join('')}</select></div>
-        <div class="field"><label for="rt-date">Date it came back</label><input id="rt-date" type="date" max="${esc(data.today)}" value="${esc(data.today)}" required></div>
-        <div class="field"><label for="rt-co">Retread company</label><input id="rt-co"></div>
-        <div class="field"><label for="rt-cost">Cost (₹)</label><input id="rt-cost" inputmode="decimal"></div>
-        <div class="field"><label for="rt-bill">Bill <span class="hint">(optional)</span></label><input id="rt-bill" type="file" accept="image/jpeg,image/png,image/webp,application/pdf"></div>
-        <div class="btns" style="grid-column:1/-1"><button class="btn" type="submit">Save</button></div>
-      </div>
     </form>`;
   const applyWhere = () => {
     const v = $('#tyre-where').value;
@@ -967,6 +965,14 @@ async function viewTyres() {
     $('#tyre-count').textContent = v ? `${shown} of ${data.tyres.length} tyres` : '';
   };
   $('#tyre-where').addEventListener('change', applyWhere);
+  document.querySelectorAll('.tc-save').forEach((btn) => btn.addEventListener('click', async () => {
+    const box = btn.closest('.tyre-costs');
+    try {
+      const r = await putJSON(`/api/tyres/${encodeURIComponent(box.dataset.tyre)}/costs`, { cost: box.querySelector('.tc-cost').value, bought_on: box.querySelector('.tc-date').value, retreads: [...box.querySelectorAll('.tc-rt')].map((i) => ({ returned_date: i.dataset.date, cost: i.value })) });
+      toast(r.changed ? 'Costs saved.' : 'Nothing was changed.');
+      if (r.changed) router();
+    } catch (err) { toast(err.message); }
+  }));
   document.querySelectorAll('.tyre-hist').forEach((b) => b.addEventListener('click', () => { const r = $(`#hist-${b.dataset.i}`); r.hidden = !r.hidden; }));
 
   const lines = [{ tyre_no: '', to: '', bus_no: '', position: '' }, { tyre_no: '', to: '', bus_no: '', position: '' }];
@@ -990,7 +996,7 @@ async function viewTyres() {
     if (!t) return { dests: [], lockBus: '' };
     if (t.status === 'Fitted') return { dests: [['bus', `Change position on Bus ${t.bus_no}`], 'In repair', 'At retreader', 'Scrapped'], lockBus: t.bus_no };
     if (t.status === 'In repair') { const last = t.spells.length ? t.spells[t.spells.length - 1].bus_no : ''; return { dests: [['bus', last ? `Fit back on Bus ${last}` : 'Fit on a bus'], 'At retreader', 'Scrapped'], lockBus: last }; }
-    if (t.status === 'At retreader') return { dests: [], lockBus: '', note: 'This tyre is at the retreader. Use "Retread came back" below when it returns.' };
+    if (t.status === 'At retreader') return { dests: [], lockBus: '', note: 'This tyre is at the retreader. Record its return under Enter a bill → Tyre repair bill.' };
     if (t.status === 'Scrapped') return { dests: [], lockBus: '', note: 'This tyre is scrapped.' };
     return { dests: [['bus', 'Fit on a bus'], 'In repair', 'At retreader', 'Scrapped'], lockBus: '' };
   };
@@ -1030,18 +1036,6 @@ async function viewTyres() {
       router();
     } catch (e) { err.textContent = e.message; err.hidden = false; }
   });
-  $('#retread-form').addEventListener('submit', async (ev) => {
-    ev.preventDefault();
-    const err = $('#rt-error'); err.hidden = true;
-    try {
-      const form = new FormData();
-      for (const [k, v] of [['tyre_no', $('#rt-tyre').value], ['date', $('#rt-date').value], ['company', $('#rt-co').value], ['cost', $('#rt-cost').value]]) form.append(k, v);
-      if ($('#rt-bill').files[0]) form.append('bill', $('#rt-bill').files[0]);
-      const r = await api('/api/tyres/retread-return', { method: 'POST', body: form });
-      toast(r.expense_saved ? 'Saved. The cost was added to the bus expenses.' : 'Saved.');
-      router();
-    } catch (e) { err.textContent = e.message; err.hidden = false; }
-  });
   // Fitting on a bus and adding spares are separate: the spares box is hidden while a bus is chosen.
   $('#at-bus').addEventListener('change', (ev) => { $('#at-fit').style.display = ev.target.value ? 'grid' : 'none'; $('#at-spares').style.display = ev.target.value ? 'none' : ''; });
   $('#add-tyres').addEventListener('submit', async (ev) => {
@@ -1055,6 +1049,37 @@ async function viewTyres() {
     try {
       const r = await postJSON('/api/tyres', body);
       toast(`Added ${r.added} tyre${r.added === 1 ? '' : 's'}: ${r.fitted} on the bus, ${r.spares} spare.${r.expense_saved ? ' The cost was added to the bus expenses.' : ''}`);
+      router();
+    } catch (e) { err.textContent = e.message; err.hidden = false; }
+  });
+}
+
+async function viewTyreBill() {
+  const data = await api('/api/tyres');
+  main.innerHTML = `
+    ${billTabs('tyrebill')}
+    <div class="topbar"><div><h1>Enter a tyre repair bill</h1><p class="sub">Tyre work does not go through a workshop visit, so it is entered here</p></div></div>
+    <form class="panel" id="retread-form" novalidate>
+      <div class="panel-h"><h2>Retread came back</h2><span class="hint">The tyre keeps its number and goes to stock. Fit it on any bus from the Tyres page. The cost is added to the expenses of the bus it came off</span></div>
+      <div class="busform">
+        <div class="error" id="rt-error" style="grid-column:1/-1" hidden></div>
+        <div class="field"><label for="rt-tyre">Tyre</label><select id="rt-tyre" required><option value="">Choose…</option>${data.tyres.filter((t) => t.status === 'At retreader').map((t) => `<option>${esc(t.tyre_no)}</option>`).join('')}</select></div>
+        <div class="field"><label for="rt-date">Date it came back</label><input id="rt-date" type="date" max="${esc(data.today)}" value="${esc(data.today)}" required></div>
+        <div class="field"><label for="rt-co">Retread company</label><input id="rt-co"></div>
+        <div class="field"><label for="rt-cost">Cost (₹)</label><input id="rt-cost" inputmode="decimal"></div>
+        <div class="field"><label for="rt-bill">Bill <span class="hint">(optional)</span></label><input id="rt-bill" type="file" accept="image/jpeg,image/png,image/webp,application/pdf"></div>
+        <div class="btns" style="grid-column:1/-1"><button class="btn" type="submit">Save</button></div>
+      </div>
+    </form>`;
+  $('#retread-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const err = $('#rt-error'); err.hidden = true;
+    try {
+      const form = new FormData();
+      for (const [k, v] of [['tyre_no', $('#rt-tyre').value], ['date', $('#rt-date').value], ['company', $('#rt-co').value], ['cost', $('#rt-cost').value]]) form.append(k, v);
+      if ($('#rt-bill').files[0]) form.append('bill', $('#rt-bill').files[0]);
+      const r = await api('/api/tyres/retread-return', { method: 'POST', body: form });
+      toast(r.expense_saved ? 'Saved. The cost was added to the bus expenses.' : 'Saved.');
       router();
     } catch (e) { err.textContent = e.message; err.hidden = false; }
   });
