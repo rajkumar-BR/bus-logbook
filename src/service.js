@@ -623,10 +623,13 @@ export function createService(storage, { readBill = null, today = localToday, us
           const open = !f.removed_date;
           const odoKm = !open && Number.isFinite(Number(f.removed_km)) && f.removed_km !== '' && f.removed_km !== null ? Number(f.removed_km) - Number(f.fitted_km) : null;
           const logged = [...routes.values()].reduce((a, b) => a + b, 0);
+          // a stretch still running is measured to the bus's last logged odometer reading, like a finished one is measured to the odometer at removal
+          const lastOdo = open ? Math.max(0, ...d.trips.filter((x) => x.bus_no === f.bus_no && f.fitted_date && x.trip_date >= f.fitted_date).map((x) => Number(x.end_odometer_km) || 0)) : 0;
+          const openKm = open && lastOdo > Number(f.fitted_km) ? lastOdo - Number(f.fitted_km) : null;
           return {
             fitment_id: f.fitment_id, bus_no: f.bus_no, position: f.position, fitted_date: f.fitted_date, fitted_km: f.fitted_km,
             removed_date: f.removed_date || '', removed_km: f.removed_km ?? '', removed_to: f.removed_to || '',
-            km: odoKm ?? logged, km_from: odoKm !== null ? 'odometer' : 'logged trips', logged_km: logged,
+            km: odoKm ?? openKm ?? logged, km_from: odoKm !== null ? 'odometer at removal' : openKm !== null ? 'odometer at last logged trip' : 'logged trips', logged_km: logged,
             by_route: [...routes].map(([route, km]) => ({ route, km })).sort((a, b) => b.km - a.km),
           };
         });
@@ -639,6 +642,16 @@ export function createService(storage, { readBill = null, today = localToday, us
         const inLife = spells.filter((x) => x.life === n);
         lives.push({ life: n, label: n === 0 ? 'Original' : `Retread ${n}`, km: (n === 0 ? Number(tyre.km_before) || 0 : 0) + inLife.reduce((a, x) => a + x.km, 0) });
       }
+      // the whole journey: each stretch on a bus, and the time spent in stock, repair or at the retreader between them
+      const journey = [];
+      spells.forEach((sp, i) => {
+        journey.push({ kind: 'bus', ...sp });
+        if (!sp.removed_date || sp.removed_to === 'Position changed') return;
+        const end = spells[i + 1] ? spells[i + 1].fitted_date : '';
+        const place = (name, from, to) => journey.push({ kind: 'place', place: name, from, to });
+        const back = sp.removed_to === 'At retreader' ? mine.find((r) => r.returned_date >= sp.removed_date) : null;
+        if (back) { place('At retreader', sp.removed_date, back.returned_date); place('In stock', back.returned_date, end); } else place(sp.removed_to, sp.removed_date, end);
+      });
       const byRoute = new Map();
       for (const sp of spells) for (const r of sp.by_route) byRoute.set(r.route, (byRoute.get(r.route) || 0) + r.km);
       const before = Number(tyre.km_before) || 0;
@@ -646,7 +659,7 @@ export function createService(storage, { readBill = null, today = localToday, us
         tyre_no: tyre.tyre_no, make: tyre.make || '', condition: tyre.condition || '', notes: tyre.notes || '',
         km_before: before,
         status: open ? 'Fitted' : (tyre.status || 'In stock'),
-        retread_count: mine.length, lives,
+        retread_count: mine.length, lives, journey,
         retreads: mine.map((r) => ({ returned_date: r.returned_date, company: r.company || '', cost: Number(r.cost) || 0, bus_no: r.bus_no || '' })),
         bus_no: open ? open.bus_no : '', position: open ? open.position : '',
         total_km: before + spells.reduce((a, x) => a + x.km, 0),

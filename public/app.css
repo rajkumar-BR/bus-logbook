@@ -339,3 +339,8 @@ ol.logs{list-style:none;margin:0;padding:0}
 .tt-hist{margin:0}
 .tt-actions{display:flex;justify-content:flex-start}
 @media (max-width:700px){.tt-cols{grid-template-columns:1fr}}
+
+.tyre-filter{display:flex;gap:10px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.tyre-filter label{font-size:12px;font-weight:600;color:var(--muted)}
+.tyre-filter select{min-width:180px}
+.tyre-place td{color:var(--muted);font-style:italic}

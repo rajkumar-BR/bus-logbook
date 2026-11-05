@@ -63,8 +63,8 @@ async function getLists(force = false) {
 
 // ---------- router
 
-const views = { fleet: viewFleet, daily: viewDaily, bus: viewBus, repeats: viewRepeats, new: viewNew, correct: viewCorrect, buses: viewBuses, import: viewImport, editbus: viewEditBus, changelog: viewChangeLog, tyres: viewTyres };
-const NAV_FOR = { fleet: '#fleet', daily: '#daily', bus: '#fleet', repeats: '#repeats', new: '#new', correct: '#new', buses: '#buses', import: '#import', editbus: '#fleet', changelog: '#changelog', tyres: '#tyres' };
+const views = { fleet: viewFleet, daily: viewDaily, bus: viewBus, repeats: viewRepeats, new: viewNew, correct: viewCorrect, buses: viewBuses, import: viewImport, editbus: viewEditBus, changelog: viewChangeLog, tyres: viewTyres, tyrereport: viewTyreReport };
+const NAV_FOR = { fleet: '#fleet', daily: '#daily', bus: '#fleet', repeats: '#repeats', new: '#new', correct: '#new', buses: '#buses', import: '#import', editbus: '#fleet', changelog: '#changelog', tyres: '#tyres', tyrereport: '#tyrereport' };
 
 async function router() {
   const [name, arg] = location.hash.slice(1).split('/');
@@ -903,10 +903,11 @@ async function viewTyres() {
   main.innerHTML = `
     <div class="topbar"><div><h1>Tyres</h1><p class="sub">A tyre stays on its bus until it goes to repair, the retreader or scrap. Unfitted tyres are common stock, and a retreaded tyre can go on any bus</p></div></div>
     <div class="panel" style="margin-bottom:18px">
-      <div class="panel-h"><h2>All tyres</h2><span class="hint">Km on routes counts the logged daily trips of the bus the tyre was fitted to. Total km uses the odometer readings given at each change</span></div>
-      <div class="tbl-wrap"><table><thead><tr><th>Tyre no.</th><th>Make / condition</th><th>Where now</th><th>Total km</th><th>Km by route</th><th></th></tr></thead><tbody>
-      ${data.tyres.map((t, i) => `<tr><td class="mono">${esc(t.tyre_no)}</td><td>${esc([t.make, t.condition].filter(Boolean).join(' · ') || '—')}${t.retread_count ? `<div class="hint">Retreaded ${t.retread_count} time${t.retread_count === 1 ? '' : 's'}</div>` : ''}</td><td>${where(t)}</td><td class="mono">${km(t.total_km)}${t.km_before ? `<div class="hint">incl. ${km(t.km_before)} before it was added</div>` : ''}${t.lives.length > 1 ? `<div class="hint">${t.lives.map((l) => `${esc(l.label)} ${km(l.km)}`).join(' · ')}</div>` : ''}</td><td>${routesText(t.by_route)}</td><td><button class="btn ghost tyre-hist" type="button" data-i="${i}">History</button></td></tr>
-        <tr class="tyre-hist-row" id="hist-${i}" hidden><td colspan="6">${t.spells.length ? `<table><thead><tr><th>Bus / position</th><th>Fitted</th><th>Removed</th><th>Km</th><th>Km by route</th></tr></thead><tbody>${t.spells.map((s) => `<tr><td>Bus ${esc(s.bus_no)} · ${esc(s.position)}</td><td>${fullDate(s.fitted_date)}<div class="hint">odometer ${Number(s.fitted_km).toLocaleString('en-IN')}</div></td><td>${s.removed_date ? `${fullDate(s.removed_date)}<div class="hint">odometer ${Number(s.removed_km).toLocaleString('en-IN')} · ${esc(s.removed_to)}</div>` : 'Still fitted'}</td><td class="mono">${km(s.km)}<div class="hint">${esc(s.km_from)}</div></td><td>${routesText(s.by_route)}</td></tr>`).join('')}</tbody></table>` : '<span class="hint">Never fitted yet.</span>'}</td></tr>`).join('') || '<tr><td colspan="6" class="hint">No tyres yet. Add them below.</td></tr>'}
+      <div class="panel-h"><h2>All tyres</h2><span class="hint">Press History to see where a tyre has been, the km on each bus, and the km by route. Retread before/after km are in the Tyre report</span></div>
+      <div class="tyre-filter"><label for="tyre-where">Where now</label><select id="tyre-where"><option value="">All tyres</option><option value="Fitted">Fitted on any bus</option>${data.buses.map((b) => `<option value="bus:${esc(b)}">Bus ${esc(b)}</option>`).join('')}${['In stock', 'In repair', 'At retreader', 'Scrapped'].map((p) => `<option value="${p}">${p}</option>`).join('')}</select><span class="hint" id="tyre-count"></span></div>
+      <div class="tbl-wrap"><table><thead><tr><th>Tyre no.</th><th>Make / condition</th><th>Where now</th><th></th></tr></thead><tbody>
+      ${data.tyres.map((t, i) => `<tr class="tyre-row" data-status="${esc(t.status)}" data-bus="${esc(t.bus_no)}"><td class="mono">${esc(t.tyre_no)}</td><td>${esc([t.make, t.condition].filter(Boolean).join(' · ') || '—')}${t.retread_count ? `<div class="hint">Retreaded ${t.retread_count} time${t.retread_count === 1 ? '' : 's'}</div>` : ''}</td><td>${where(t)}</td><td><button class="btn ghost tyre-hist" type="button" data-i="${i}">History</button></td></tr>
+        <tr class="tyre-hist-row" id="hist-${i}" hidden><td colspan="4">${t.journey.length ? `<table><thead><tr><th>Where</th><th>From</th><th>Until</th><th>Km</th><th>Km by route</th></tr></thead><tbody>${t.journey.map((s) => s.kind === 'place' ? `<tr class="tyre-place"><td>${esc(s.place)}</td><td>${fullDate(s.from)}</td><td>${s.to ? fullDate(s.to) : 'Now'}</td><td class="mono">—</td><td>—</td></tr>` : `<tr><td>Bus ${esc(s.bus_no)} · ${esc(s.position)}</td><td>${fullDate(s.fitted_date)}<div class="hint">odometer ${Number(s.fitted_km).toLocaleString('en-IN')}</div></td><td>${s.removed_date ? `${fullDate(s.removed_date)}<div class="hint">odometer ${Number(s.removed_km).toLocaleString('en-IN')}${s.removed_to === 'Position changed' ? ' · moved to another wheel' : ''}</div>` : 'Now'}</td><td class="mono">${km(s.km)}<div class="hint">${esc(s.km_from)}</div></td><td>${routesText(s.by_route)}<div class="hint">logged trips: ${km(s.logged_km)}</div></td></tr>`).join('')}</tbody></table>` : '<span class="hint">Never fitted yet.</span>'}</td></tr>`).join('') || '<tr><td colspan="4" class="hint">No tyres yet. Add them below.</td></tr>'}
       </tbody></table></div>
     </div>
     <form class="panel" id="add-tyres" style="margin-bottom:18px" novalidate>
@@ -922,7 +923,7 @@ async function viewTyres() {
           <div class="field"><label for="at-odo">Bus odometer now (km)</label><input id="at-odo" inputmode="decimal"></div>
           ${data.positions.map((p, i) => `<div class="field"><label for="at-pos-${i}">${esc(p)}</label><input id="at-pos-${i}" data-pos="${esc(p)}" placeholder="tyre no." autocomplete="off"></div>`).join('')}
         </div>
-        <div class="field" style="grid-column:1/-1"><label for="at-nos">Spare tyres (common stock), one tyre number per line</label><textarea id="at-nos" rows="3" placeholder="30294492023&#10;30159451923"></textarea></div>
+        <div class="field" id="at-spares" style="grid-column:1/-1"><label for="at-nos">Spare tyres (common stock), one tyre number per line</label><textarea id="at-nos" rows="3" placeholder="30294492023&#10;30159451923"></textarea></div>
         <div class="btns" style="grid-column:1/-1"><button class="btn" type="submit">Add tyres</button></div>
       </div>
     </form>
@@ -948,6 +949,19 @@ async function viewTyres() {
         <div class="btns" style="grid-column:1/-1"><button class="btn" type="submit">Save</button></div>
       </div>
     </form>`;
+  const applyWhere = () => {
+    const v = $('#tyre-where').value;
+    let shown = 0;
+    document.querySelectorAll('.tyre-row').forEach((row) => {
+      const ok = !v || (v === 'Fitted' ? row.dataset.status === 'Fitted' : v.startsWith('bus:') ? row.dataset.status === 'Fitted' && row.dataset.bus === v.slice(4) : row.dataset.status === v);
+      row.hidden = !ok;
+      if (ok) shown += 1;
+      const hist = row.nextElementSibling;
+      if (hist && hist.classList.contains('tyre-hist-row')) hist.hidden = true;
+    });
+    $('#tyre-count').textContent = v ? `${shown} of ${data.tyres.length} tyres` : '';
+  };
+  $('#tyre-where').addEventListener('change', applyWhere);
   document.querySelectorAll('.tyre-hist').forEach((b) => b.addEventListener('click', () => { const r = $(`#hist-${b.dataset.i}`); r.hidden = !r.hidden; }));
 
   const lines = [{ tyre_no: '', to: '', bus_no: '', position: '' }, { tyre_no: '', to: '', bus_no: '', position: '' }];
@@ -1020,11 +1034,12 @@ async function viewTyres() {
       router();
     } catch (e) { err.textContent = e.message; err.hidden = false; }
   });
-  $('#at-bus').addEventListener('change', (ev) => { $('#at-fit').style.display = ev.target.value ? 'grid' : 'none'; });
+  // Fitting on a bus and adding spares are separate: the spares box is hidden while a bus is chosen.
+  $('#at-bus').addEventListener('change', (ev) => { $('#at-fit').style.display = ev.target.value ? 'grid' : 'none'; $('#at-spares').style.display = ev.target.value ? 'none' : ''; });
   $('#add-tyres').addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const err = $('#at-error'); err.hidden = true;
-    const body = { tyre_nos: $('#at-nos').value, make: $('#at-make').value, condition: $('#at-cond').value, km_before: $('#at-km').value };
+    const body = { tyre_nos: $('#at-bus').value ? '' : $('#at-nos').value, make: $('#at-make').value, condition: $('#at-cond').value, km_before: $('#at-km').value };
     if ($('#at-bus').value) {
       body.fitted = { bus_no: $('#at-bus').value, date: $('#at-date').value, odometer: $('#at-odo').value, positions: {} };
       document.querySelectorAll('#at-fit [data-pos]').forEach((i) => { body.fitted.positions[i.dataset.pos] = i.value; });
@@ -1035,6 +1050,33 @@ async function viewTyres() {
       router();
     } catch (e) { err.textContent = e.message; err.hidden = false; }
   });
+}
+
+// ---------- Tyre report: each tyre on its own, not tied to a bus
+
+async function viewTyreReport() {
+  const data = await api('/api/tyres');
+  const km = (n) => `${Math.round(Number(n) || 0).toLocaleString('en-IN')} km`;
+  const rows = data.tyres.map((t) => {
+    const after = t.lives.slice(1).reduce((a, l) => a + l.km, 0);
+    const last = t.retreads[t.retreads.length - 1];
+    return { ...t, before: t.lives[0].km, after, last };
+  });
+  const retreaded = rows.filter((t) => t.retread_count);
+  main.innerHTML = `
+    <div class="topbar"><div><h1>Tyre report</h1><p class="sub">Every tyre on its own, whichever bus it ran on: the km it ran before it was retreaded and the km since</p></div></div>
+    <div class="panel">
+      <div class="panel-h"><h2>Retreaded tyres</h2><span class="hint">Km are measured from each bus's odometer at fitting and at removal. A tyre still on a bus counts up to that bus's latest logged odometer reading</span></div>
+      <div class="tbl-wrap"><table><thead><tr><th>Tyre no.</th><th>Make</th><th>Retreaded on</th><th>Retread company</th><th>Km before retread</th><th>Km after retread</th><th>Where now</th></tr></thead><tbody>
+      ${retreaded.map((t) => `<tr><td class="mono">${esc(t.tyre_no)}</td><td>${esc(t.make || '—')}</td><td>${fullDate(t.last.returned_date)}${t.retread_count > 1 ? `<div class="hint">${t.retread_count} retreads, the latest shown</div>` : ''}</td><td>${esc(t.last.company || '—')}</td><td class="mono">${km(t.before)}</td><td class="mono">${km(t.after)}</td><td>${t.status === 'Fitted' ? `Bus ${esc(t.bus_no)} · ${esc(t.position)}` : esc(t.status)}</td></tr>`).join('') || '<tr><td colspan="7" class="hint">No tyre has been retreaded yet.</td></tr>'}
+      </tbody></table></div>
+    </div>
+    <div class="panel" style="margin-top:18px">
+      <div class="panel-h"><h2>Tyres not retreaded yet</h2><span class="hint">Km run so far</span></div>
+      <div class="tbl-wrap"><table><thead><tr><th>Tyre no.</th><th>Make / condition</th><th>Km so far</th><th>Where now</th></tr></thead><tbody>
+      ${rows.filter((t) => !t.retread_count).map((t) => `<tr><td class="mono">${esc(t.tyre_no)}</td><td>${esc([t.make, t.condition].filter(Boolean).join(' · ') || '—')}</td><td class="mono">${km(t.before)}${t.km_before ? `<div class="hint">incl. ${km(t.km_before)} before it was added</div>` : ''}</td><td>${t.status === 'Fitted' ? `Bus ${esc(t.bus_no)} · ${esc(t.position)}` : esc(t.status)}</td></tr>`).join('') || '<tr><td colspan="4" class="hint">No tyres.</td></tr>'}
+      </tbody></table></div>
+    </div>`;
 }
 
 // ---------- Change log
