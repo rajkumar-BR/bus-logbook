@@ -660,7 +660,7 @@ export function createService(storage, { readBill = null, today = localToday, us
         km_before: before,
         status: open ? 'Fitted' : (tyre.status || 'In stock'),
         retread_count: mine.length, lives, journey,
-        retreads: mine.map((r) => ({ returned_date: r.returned_date, company: r.company || '', cost: Number(r.cost) || 0, bus_no: r.bus_no || '' })),
+        retreads: mine.map((r) => ({ returned_date: r.returned_date, company: r.company || '', cost: Number(r.cost) || 0, bus_no: r.bus_no || '', bill_url: storage.fileUrl(r.bill_link) })),
         bus_no: open ? open.bus_no : '', position: open ? open.position : '',
         total_km: before + spells.reduce((a, x) => a + x.km, 0),
         by_route: [...byRoute].map(([route, km]) => ({ route, km })).sort((a, b) => b.km - a.km),
@@ -672,7 +672,7 @@ export function createService(storage, { readBill = null, today = localToday, us
 
   // A tyre sent to the retreader (status 'At retreader') comes back with the same serial number, into the common stock.
   // The cost is booked as an expense of the bus it last ran on.
-  async function returnRetread(input) {
+  async function returnRetread(input, bill = null) {
     const tyre_no = String(input.tyre_no || '').trim();
     const date = String(input.date || '').trim();
     const company = String(input.company || '').trim();
@@ -680,6 +680,14 @@ export function createService(storage, { readBill = null, today = localToday, us
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00`)) || date > today()) throw new UserError('Choose a valid date that is not in the future.');
     if (!Number.isFinite(cost) || cost < 0) throw new UserError('Enter the retread cost in rupees.');
     const now = localNow();
+    // The bill is optional. It is stored first; the retread record and the bus's history line then carry its link.
+    let bill_link = '';
+    if (bill) {
+      const known = (await storage.read('Tyres')).find((x) => x.tyre_no.toLowerCase() === tyre_no.toLowerCase());
+      if (!known) throw new UserError(`Tyre ${tyre_no} is not in the tyre list.`);
+      const ext = path.extname(bill.originalname) || (bill.mimetype === 'application/pdf' ? '.pdf' : '.jpg');
+      bill_link = await storage.saveFile('Bills/Tyre retreads', [date, 'tyre', known.tyre_no, company].filter(Boolean).join(' ') + ext, bill.buffer);
+    }
     const result = await storage.transact((tx) => {
       const tyre = tx.read('Tyres').find((x) => x.tyre_no.toLowerCase() === tyre_no.toLowerCase());
       if (!tyre) throw new UserError(`Tyre ${tyre_no} is not in the tyre list.`);
@@ -688,13 +696,13 @@ export function createService(storage, { readBill = null, today = localToday, us
       if (f && f.removed_date && date < f.removed_date) throw new UserError(`The tyre went to the retreader on ${f.removed_date}. The return date cannot be earlier.`);
       const bus_no = f ? f.bus_no : '';
       const n = tx.read('Tyre retreads').length + 1;
-      tx.append('Tyre retreads', [{ retread_id: `RT-${String(n).padStart(4, '0')}-${tyre.tyre_no}`, tyre_no: tyre.tyre_no, returned_date: date, company, cost, bus_no, notes: '' }]);
+      tx.append('Tyre retreads', [{ retread_id: `RT-${String(n).padStart(4, '0')}-${tyre.tyre_no}`, tyre_no: tyre.tyre_no, returned_date: date, company, cost, bus_no, notes: '', bill_link }]);
       tx.update('Tyres', (x) => x.tyre_no === tyre.tyre_no, { status: 'In stock', condition: 'Retreaded' });
       if (bus_no && cost > 0) {
         const entryId = `E-${date}-${bus_no}-RT${String(n).padStart(4, '0')}`;
         tx.append('Entries', [{
           entry_id: entryId, bus_no, kind: TYRE_RETREAD, date_in: date, date_out: date, days_off_road: 0, system: 'Tyres & alignment',
-          problem_reported: `Tyre ${tyre.tyre_no} retreaded`, workshop: company, total_cost: cost, labour_cost: 0, is_repeat: false,
+          problem_reported: `Tyre ${tyre.tyre_no} retreaded`, workshop: company, bill_link, total_cost: cost, labour_cost: 0, is_repeat: false,
           route_at_time: '', record_status: '', entered_by: user, entered_at: now,
         }]);
       }

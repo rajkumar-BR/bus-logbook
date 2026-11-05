@@ -946,6 +946,7 @@ async function viewTyres() {
         <div class="field"><label for="rt-date">Date it came back</label><input id="rt-date" type="date" max="${esc(data.today)}" value="${esc(data.today)}" required></div>
         <div class="field"><label for="rt-co">Retread company</label><input id="rt-co"></div>
         <div class="field"><label for="rt-cost">Cost (₹)</label><input id="rt-cost" inputmode="decimal"></div>
+        <div class="field"><label for="rt-bill">Bill <span class="hint">(optional)</span></label><input id="rt-bill" type="file" accept="image/jpeg,image/png,image/webp,application/pdf"></div>
         <div class="btns" style="grid-column:1/-1"><button class="btn" type="submit">Save</button></div>
       </div>
     </form>`;
@@ -1029,7 +1030,10 @@ async function viewTyres() {
     ev.preventDefault();
     const err = $('#rt-error'); err.hidden = true;
     try {
-      const r = await postJSON('/api/tyres/retread-return', { tyre_no: $('#rt-tyre').value, date: $('#rt-date').value, company: $('#rt-co').value, cost: $('#rt-cost').value });
+      const form = new FormData();
+      for (const [k, v] of [['tyre_no', $('#rt-tyre').value], ['date', $('#rt-date').value], ['company', $('#rt-co').value], ['cost', $('#rt-cost').value]]) form.append(k, v);
+      if ($('#rt-bill').files[0]) form.append('bill', $('#rt-bill').files[0]);
+      const r = await api('/api/tyres/retread-return', { method: 'POST', body: form });
       toast(r.expense_saved ? 'Saved. The cost was added to the bus expenses.' : 'Saved.');
       router();
     } catch (e) { err.textContent = e.message; err.hidden = false; }
@@ -1067,8 +1071,8 @@ async function viewTyreReport() {
     <div class="topbar"><div><h1>Tyre report</h1><p class="sub">Every tyre on its own, whichever bus it ran on: the km it ran before it was retreaded and the km since</p></div></div>
     <div class="panel">
       <div class="panel-h"><h2>Retreaded tyres</h2><span class="hint">Km are measured from each bus's odometer at fitting and at removal. A tyre still on a bus counts up to that bus's latest logged odometer reading</span></div>
-      <div class="tbl-wrap"><table><thead><tr><th>Tyre no.</th><th>Make</th><th>Retreaded on</th><th>Retread company</th><th>Km before retread</th><th>Km after retread</th><th>Where now</th></tr></thead><tbody>
-      ${retreaded.map((t) => `<tr><td class="mono">${esc(t.tyre_no)}</td><td>${esc(t.make || '—')}</td><td>${fullDate(t.last.returned_date)}${t.retread_count > 1 ? `<div class="hint">${t.retread_count} retreads, the latest shown</div>` : ''}</td><td>${esc(t.last.company || '—')}</td><td class="mono">${km(t.before)}</td><td class="mono">${km(t.after)}</td><td>${t.status === 'Fitted' ? `Bus ${esc(t.bus_no)} · ${esc(t.position)}` : esc(t.status)}</td></tr>`).join('') || '<tr><td colspan="7" class="hint">No tyre has been retreaded yet.</td></tr>'}
+      <div class="tbl-wrap"><table><thead><tr><th>Tyre no.</th><th>Make</th><th>Retreaded on</th><th>Retread company</th><th>Km before retread</th><th>Km after retread</th><th>Where now</th><th>Bill</th></tr></thead><tbody>
+      ${retreaded.map((t) => `<tr><td class="mono">${esc(t.tyre_no)}</td><td>${esc(t.make || '—')}</td><td>${fullDate(t.last.returned_date)}${t.retread_count > 1 ? `<div class="hint">${t.retread_count} retreads, the latest shown</div>` : ''}</td><td>${esc(t.last.company || '—')}</td><td class="mono">${km(t.before)}</td><td class="mono">${km(t.after)}</td><td>${t.status === 'Fitted' ? `Bus ${esc(t.bus_no)} · ${esc(t.position)}` : esc(t.status)}</td><td>${t.last.bill_url ? `<a href="${esc(t.last.bill_url)}" target="_blank" rel="noopener">View bill</a>` : '<span class="hint">—</span>'}</td></tr>`).join('') || '<tr><td colspan="8" class="hint">No tyre has been retreaded yet.</td></tr>'}
       </tbody></table></div>
     </div>
     <div class="panel" style="margin-top:18px">

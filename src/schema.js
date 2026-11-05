@@ -63,7 +63,7 @@ export const TABS = {
   ],
   'Tyre retreads': [
     ['school_id', 'text'], ['retread_id', 'text'], ['tyre_no', 'text'], ['returned_date', 'date'], ['company', 'text'],
-    ['cost', 'number'], ['bus_no', 'text'], ['notes', 'text'],
+    ['cost', 'number'], ['bus_no', 'text'], ['notes', 'text'], ['bill_link', 'text'],
   ],
   'Trip settings': [
     ['school_id', 'text'], ['route_id', 'text'], ['effective_from', 'date'], ['start_stop', 'text'], ['end_stop', 'text'],

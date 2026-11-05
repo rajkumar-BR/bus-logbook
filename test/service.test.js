@@ -304,7 +304,7 @@ test('tyres stay on their bus; retreads come back to stock and can go to any bus
   assert.equal(by.B.bus_no, '02');
   assert.equal(by.B.condition, 'Retreaded');
   assert.equal(by.B.retread_count, 1);
-  assert.deepEqual(by.B.retreads, [{ returned_date: '2026-10-18', company: 'Green Retreads', cost: 4500, bus_no: '01' }]);
+  assert.deepEqual(by.B.retreads, [{ returned_date: '2026-10-18', company: 'Green Retreads', cost: 4500, bus_no: '01', bill_url: '' }]);
   assert.deepEqual(by.B.lives.map((l) => [l.label, l.km]), [['Original', 100], ['Retread 1', 20]]); // 100 km by odometer on bus 1, then 20 logged km on bus 2
   assert.deepEqual(by.B.by_route, [{ route: 'Kurur', km: 60 }, { route: 'Perahambi', km: 20 }]);
   assert.equal(by.A.status, 'In repair');
@@ -465,4 +465,23 @@ test('on Saturdays a two-trip bus runs one combined trip with its own stops, tim
   assert.equal((await plans('02', '2026-10-31'))[0].planned_km, 30);
   assert.equal((await plans('02', '2026-10-31'))[0].expected_start, '07:50'); // fields not sent keep what was in force
   assert.equal((await service.getBus('02')).bus.trip_plans.length, 2); // Edit bus still shows the two weekday trips
+});
+
+test('a retread bill is optional; when given it is kept on the retread and on the bus history line', async () => {
+  const storage = memoryStorage({
+    Buses: [{ bus_no: '01', active: true }],
+    Tyres: [{ tyre_no: 'A', status: 'At retreader' }, { tyre_no: 'B', status: 'At retreader' }],
+    'Tyre fitments': [
+      { fitment_id: 'F1', tyre_no: 'A', bus_no: '01', position: 'Front left', fitted_date: '2026-10-01', fitted_km: 100, removed_date: '2026-10-05', removed_km: 200, removed_to: 'At retreader' },
+      { fitment_id: 'F2', tyre_no: 'B', bus_no: '01', position: 'Front right', fitted_date: '2026-10-01', fitted_km: 100, removed_date: '2026-10-05', removed_km: 200, removed_to: 'At retreader' },
+    ],
+  });
+  const service = createService(storage, { today: () => '2026-10-23', user: 'test' });
+  await service.returnRetread({ tyre_no: 'A', date: '2026-10-10', company: 'Green', cost: 1000 });
+  await service.returnRetread({ tyre_no: 'B', date: '2026-10-11', company: 'Green', cost: 1200 }, { originalname: 'bill.pdf', mimetype: 'application/pdf', buffer: Buffer.from('pdf') });
+  const by = Object.fromEntries((await service.getTyres()).tyres.map((x) => [x.tyre_no, x]));
+  assert.equal(by.A.retreads[0].bill_url, '');
+  assert.equal(by.B.retreads[0].bill_url, '/files/Bills/Tyre retreads/2026-10-11 tyre B Green.pdf');
+  const entries = (await service.getBus('01')).entries;
+  assert.deepEqual(entries.map((e) => [e.total_cost, e.bill_url]).sort(), [[1000, ''], [1200, '/files/Bills/Tyre retreads/2026-10-11 tyre B Green.pdf']]);
 });
