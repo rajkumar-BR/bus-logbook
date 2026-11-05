@@ -67,6 +67,8 @@ export function createService(storage, { readBill = null, today = localToday, us
 
   // The trips a bus runs today, in order, with the expected pick-up and drop-off time set on each trip's route.
   // The settings in force on a date: the latest dated change on or before it, else the trip's base settings.
+  // Until a planned km is set for a trip, the distance written in its route details ("... · 29 km · ...") is used.
+  const kmFromNotes = (route) => Number(String(route?.notes || '').match(/(\d+(?:\.\d+)?) km/i)?.[1]) || '';
   const weekdayPlans = (d, busNo, date) => {
     const t = date;
     return d.assignments
@@ -79,7 +81,7 @@ export function createService(storage, { readBill = null, today = localToday, us
         const first = String(r.start_stop || '').trim()
           || (String(r.notes || '').match(/Starts [\d.: ]*(?:AM|PM)? ?at (.+?), reaches school/i)?.[1]
           || String(r.notes || '').match(/^Trip \d+: (.+?) \d+\.\d+ ?[AP]M/i)?.[1] || '').trim();
-        return { trip_number: i + 1, route_id: a.route_id, start_stop: first, end_stop: String(r.end_stop || '').trim() || first, route_name: r.route_name || a.route_id, expected_start: r.expected_start || '', expected_end: r.expected_end || '', expected_evening_start: r.expected_evening_start || '', expected_evening_end: r.expected_evening_end || '', planned_km: r.planned_km ?? '', planned_evening_km: r.planned_evening_km ?? '',
+        return { trip_number: i + 1, route_id: a.route_id, start_stop: first, end_stop: String(r.end_stop || '').trim() || first, route_name: r.route_name || a.route_id, expected_start: r.expected_start || '', expected_end: r.expected_end || '', expected_evening_start: r.expected_evening_start || '', expected_evening_end: r.expected_evening_end || '', planned_km: hasKm(r.planned_km) ? r.planned_km : kmFromNotes(base), planned_evening_km: r.planned_evening_km ?? '',
           history: history.map((x) => ({ effective_from: x.effective_from, start_stop: x.start_stop || '', end_stop: x.end_stop || '', expected_start: x.expected_start || '', expected_end: x.expected_end || '', expected_evening_start: x.expected_evening_start || '', expected_evening_end: x.expected_evening_end || '', planned_km: x.planned_km ?? '', planned_evening_km: x.planned_evening_km ?? '' })) };
       });
   };
