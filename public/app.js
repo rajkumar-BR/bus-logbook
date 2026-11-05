@@ -154,13 +154,12 @@ async function viewFleet() {
     <div class="panel">
       <div class="panel-h"><h2>All buses</h2><span class="hint">Service due: every 10,000 km or 90 days unless set per bus</span></div>
       <div class="tbl-wrap"><table class="fleet">
-        <thead><tr><th>Bus</th><th>Route</th><th>Status</th><th>Odometer</th><th>Last service</th><th>Next service</th><th>Spent in ${esc(s.year)}</th><th>Repairs · 12 mo</th><th>Watch</th></tr></thead>
+        <thead><tr><th>Bus</th><th>Route</th><th>Status</th><th>Last service</th><th>Next service</th><th>Spent in ${esc(s.year)}</th><th>Repairs · 12 mo</th><th>Watch</th></tr></thead>
         <tbody>${d.buses.map((b) => `
           <tr data-go="#bus/${encodeURIComponent(b.bus_no)}" tabindex="0">
             <td><span class="busno">${esc(b.bus_no)}</span></td>
             <td>${esc(b.route || '—')}<div class="route">${esc([b.make_model, b.year].filter(Boolean).join(' · '))}</div></td>
             <td>${pill(b.status)}</td>
-            <td class="mono">${kmText(b.odometer)}</td>
             <td>${fullDate(b.last_service)}</td>
             <td>${serviceCell(b.service, b.status)}</td>
             <td class="mono">${inr(b.spent_year)}</td>
