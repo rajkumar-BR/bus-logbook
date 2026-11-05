@@ -205,15 +205,15 @@ async function viewDaily(range = '') {
       </tr>`).join('')}</tbody></table></div>
     </div>
     <div class="panel report-panel">
-      <div class="panel-h"><h2>Trip legs · ${fullDate(report.from)} to ${fullDate(report.to)}</h2><span class="hint">Odometer readings should continue from one trip into the next</span></div>
+      <div class="panel-h"><h2>Trip legs · ${fullDate(report.from)} to ${fullDate(report.to)}</h2><span class="hint">Each trip has a morning leg (first stop to school) and an evening leg (school to the drop-offs)</span></div>
       <div id="trip-edit-slot"></div>
       <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Bus / driver</th><th>Trip</th><th>From → To</th><th>Start → End km</th><th>Actual / Planned</th><th>Extra km</th><th>Scheduled / Actual</th><th>Image</th><th></th></tr></thead><tbody>
       ${report.buses.flatMap((bus) => bus.trips.map((trip) => `<tr>
-        <td>${fullDate(bus.report_date)}</td><td>Bus ${esc(bus.bus_no)}<div class="hint">${esc(bus.driver_name)}</div></td><td>${trip.trip_number}</td><td>${esc(trip.origin)} → ${esc(trip.destination)}</td>
+        <td>${fullDate(bus.report_date)}</td><td>Bus ${esc(bus.bus_no)}<div class="hint">${esc(bus.driver_name)}</div></td><td>${trip.trip_number}<div class="hint">${esc(trip.session)}</div></td><td>${esc(trip.origin)} → ${esc(trip.destination)}</td>
         <td class="mono">${Number(trip.start_odometer_km).toLocaleString('en-IN')} → ${Number(trip.end_odometer_km).toLocaleString('en-IN')}</td>
         <td class="mono">${kmText(trip.actual_km)} / ${kmText(trip.planned_km)}</td><td class="mono">${trip.extra_km > 0 ? `+${Number(trip.extra_km).toLocaleString('en-IN')} km` : `${Number(trip.extra_km).toLocaleString('en-IN')} km`}</td>
         <td>${esc(trip.scheduled_start)}–${esc(trip.scheduled_end)}<div class="hint">${esc(trip.actual_start)}–${esc(trip.actual_end)} · ${esc(trip.timing_status)}</div></td>
-        <td>${trip.photo_url ? `<a href="${esc(trip.photo_url)}" target="_blank" rel="noopener"><img class="trip-thumb" src="${esc(trip.photo_url)}" alt="Bus ${esc(bus.bus_no)} trip ${trip.trip_number}" loading="lazy"></a>` : '—'}</td>
+        <td>${trip.photo_url ? `<a href="${esc(trip.photo_url)}" target="_blank" rel="noopener"><img class="trip-thumb" src="${esc(trip.photo_url)}" alt="Bus ${esc(bus.bus_no)} trip ${trip.trip_number} ${esc(trip.session)}" loading="lazy"></a>` : '—'}</td>
         <td><button class="btn ghost trip-edit" type="button" data-trip="${esc(trip.trip_id)}">Edit</button></td>
       </tr>`)).join('') || '<tr><td colspan="10" class="hint">No trip legs have been reported for this date range.</td></tr>'}
       </tbody></table></div>
@@ -240,18 +240,18 @@ async function viewDaily(range = '') {
         <div class="field"><label for="daily-income">Income collected today (₹)</label><input id="daily-income" type="number" min="0" step="0.01" value="0" required></div>
         <div class="field"><label for="daily-expenses">Expenses today (₹)</label><input id="daily-expenses" type="number" min="0" step="0.01" value="0" required></div>
         <div class="field full"><label for="daily-notes">Daily notes</label><textarea id="daily-notes" placeholder="Fuel, tolls, delay reasons, or other notes"></textarea></div>
-        ${Array.from({ length: Math.max(1, ...lists.buses.map((bus) => bus.trips)) }, (_, i) => i + 1).map((number) => `<fieldset class="trip-leg full" data-trip="${number}" style="display:none" disabled><legend>Trip ${number}</legend><div class="trip-leg-grid">
-          <div class="field"><label for="trip-${number}-origin">From</label><input id="trip-${number}-origin" placeholder="${number === 1 ? 'Source' : `Destination ${number - 1}`}" required></div>
-          <div class="field"><label for="trip-${number}-destination">To</label><input id="trip-${number}-destination" placeholder="Destination ${number}" required></div>
-          <div class="field"><label for="trip-${number}-planned">Planned km</label><input id="trip-${number}-planned" type="number" min="0.1" step="0.1" required></div>
-          <div class="field"><label for="trip-${number}-start-odo">Start km</label><input id="trip-${number}-start-odo" type="number" min="0" step="0.1" required></div>
-          <div class="field"><label for="trip-${number}-end-odo">End km</label><input id="trip-${number}-end-odo" type="number" min="0" step="0.1" required></div>
-          <div class="field"><label for="trip-${number}-photo">Trip image <span class="hint">(optional)</span></label><input id="trip-${number}-photo" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/heic"></div>
-          <div class="field"><label for="trip-${number}-scheduled-start">Scheduled start</label><input id="trip-${number}-scheduled-start" type="time" required></div>
-          <div class="field"><label for="trip-${number}-actual-start">Actual start</label><input id="trip-${number}-actual-start" type="time" required></div>
-          <div class="field"><label for="trip-${number}-scheduled-end">Scheduled end</label><input id="trip-${number}-scheduled-end" type="time" required></div>
-          <div class="field"><label for="trip-${number}-actual-end">Actual end</label><input id="trip-${number}-actual-end" type="time" required></div>
-        </div></fieldset>`).join('')}
+        ${Array.from({ length: Math.max(1, ...lists.buses.map((bus) => bus.trips)) }, (_, i) => i + 1).flatMap((number) => [['m', 'Morning'], ['e', 'Evening']].map(([k, session]) => { const id = `trip-${number}-${k}`; return `<fieldset class="trip-leg full" data-trip="${number}" data-session="${session}" style="display:none" disabled><legend>Trip ${number} · ${session}</legend><div class="trip-leg-grid">
+          <div class="field"><label for="${id}-origin">From</label><input id="${id}-origin" placeholder="${session === 'Morning' ? 'First stop' : 'School'}" required></div>
+          <div class="field"><label for="${id}-destination">To</label><input id="${id}-destination" placeholder="${session === 'Morning' ? 'School' : 'Last stop'}" required></div>
+          <div class="field"><label for="${id}-planned">Planned km</label><input id="${id}-planned" type="number" min="0.1" step="0.1" required></div>
+          <div class="field"><label for="${id}-start-odo">Start km</label><input id="${id}-start-odo" type="number" min="0" step="0.1" required></div>
+          <div class="field"><label for="${id}-end-odo">End km</label><input id="${id}-end-odo" type="number" min="0" step="0.1" required></div>
+          <div class="field"><label for="${id}-photo">Trip image <span class="hint">(optional)</span></label><input id="${id}-photo" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/heic"></div>
+          <div class="field"><label for="${id}-scheduled-start">Scheduled start</label><input id="${id}-scheduled-start" type="time" required></div>
+          <div class="field"><label for="${id}-actual-start">Actual start</label><input id="${id}-actual-start" type="time" required></div>
+          <div class="field"><label for="${id}-scheduled-end">Scheduled end</label><input id="${id}-scheduled-end" type="time" required></div>
+          <div class="field"><label for="${id}-actual-end">Actual end</label><input id="${id}-actual-end" type="time" required></div>
+        </div></fieldset>`; })).join('')}
         <div class="btns full"><button class="btn" type="submit" id="trip-save">Save daily report</button></div>
       </form>
     </div>`;
@@ -272,7 +272,7 @@ async function viewDaily(range = '') {
     const t = bus.trips.find((x) => x.trip_id === btn.dataset.trip);
     const slot = $('#trip-edit-slot');
     slot.innerHTML = `<form class="trip-form" id="trip-edit-form" style="padding:14px;border-bottom:1px solid var(--line,#ddd)">
-      <div class="full"><b>Edit Bus ${esc(bus.bus_no)} · Trip ${t.trip_number} · ${fullDate(bus.report_date)}</b> <span class="hint">Expected ${esc(t.scheduled_start)}–${esc(t.scheduled_end)} (set under Edit bus → Trip times)</span></div>
+      <div class="full"><b>Edit Bus ${esc(bus.bus_no)} · Trip ${t.trip_number} ${esc(t.session)} · ${fullDate(bus.report_date)}</b> <span class="hint">Expected ${esc(t.scheduled_start)}–${esc(t.scheduled_end)} (set under Edit bus → Trip times)</span></div>
       <div class="error full" id="te-error" hidden></div>
       <div class="field"><label for="te-start">Actual pick-up</label><input id="te-start" type="time" value="${esc(t.actual_start)}" required></div>
       <div class="field"><label for="te-end">Actual drop-off</label><input id="te-end" type="time" value="${esc(t.actual_end)}" required></div>
@@ -314,18 +314,20 @@ async function viewDaily(range = '') {
     }
   });
   // Only as many trips as the chosen bus runs in a day are shown; none until a bus is chosen.
-  const shownTrips = () => [...document.querySelectorAll('#trip-form .trip-leg:not([disabled])')].map((el) => Number(el.dataset.trip));
+  const shownTrips = () => [...document.querySelectorAll('#trip-form .trip-leg:not([disabled])')].map((el) => ({ number: Number(el.dataset.trip), session: el.dataset.session, id: `trip-${el.dataset.trip}-${el.dataset.session === 'Morning' ? 'm' : 'e'}` }));
   $('#trip-bus').addEventListener('change', () => {
     const count = (lists.buses.find((bus) => bus.bus_no === $('#trip-bus').value) || {}).trips || 0;
     const plans = (lists.buses.find((bus) => bus.bus_no === $('#trip-bus').value) || {}).plans || [];
     document.querySelectorAll('#trip-form .trip-leg').forEach((el) => {
       const n = Number(el.dataset.trip);
+      const k = el.dataset.session === 'Morning' ? 'm' : 'e';
       const on = n <= count;
       el.disabled = !on;
       el.style.display = on ? '' : 'none';
       // expected times come from the trip's setting (Edit bus → Trip times); only unset ones are typed here
-      for (const [field, key] of [['scheduled-start', 'expected_start'], ['scheduled-end', 'expected_end']]) {
-        const input = $(`#trip-${n}-${field}`);
+      const pre = el.dataset.session === 'Morning' ? 'expected_' : 'expected_evening_';
+      for (const [field, key] of [['scheduled-start', `${pre}start`], ['scheduled-end', `${pre}end`]]) {
+        const input = $(`#trip-${n}-${k}-${field}`);
         const set = on && plans[n - 1] && plans[n - 1][key];
         input.readOnly = Boolean(set);
         input.title = set ? 'Set under Edit bus → Trip times' : '';
@@ -344,24 +346,26 @@ async function viewDaily(range = '') {
       income_collected: $('#daily-income').value,
       expenses: $('#daily-expenses').value,
       notes: $('#daily-notes').value.trim(),
-      trips: shownTrips().map((number) => ({
-        origin: $(`#trip-${number}-origin`).value.trim(),
-        destination: $(`#trip-${number}-destination`).value.trim(),
-        planned_km: $(`#trip-${number}-planned`).value,
-        start_odometer_km: $(`#trip-${number}-start-odo`).value,
-        end_odometer_km: $(`#trip-${number}-end-odo`).value,
-        scheduled_start: $(`#trip-${number}-scheduled-start`).value,
-        actual_start: $(`#trip-${number}-actual-start`).value,
-        scheduled_end: $(`#trip-${number}-scheduled-end`).value,
-        actual_end: $(`#trip-${number}-actual-end`).value,
+      trips: shownTrips().map(({ number, session, id }) => ({
+        trip_number: number,
+        session,
+        origin: $(`#${id}-origin`).value.trim(),
+        destination: $(`#${id}-destination`).value.trim(),
+        planned_km: $(`#${id}-planned`).value,
+        start_odometer_km: $(`#${id}-start-odo`).value,
+        end_odometer_km: $(`#${id}-end-odo`).value,
+        scheduled_start: $(`#${id}-scheduled-start`).value,
+        actual_start: $(`#${id}-actual-start`).value,
+        scheduled_end: $(`#${id}-scheduled-end`).value,
+        actual_end: $(`#${id}-actual-end`).value,
       })),
     };
     const data = new FormData();
     data.append('report', JSON.stringify(report));
     const shown = shownTrips();
-    const withPhoto = shown.filter((number) => $(`#trip-${number}-photo`).files[0]);
-    withPhoto.forEach((number) => data.append('photos', $(`#trip-${number}-photo`).files[0]));
-    report.photo_for = withPhoto.map((number) => shown.indexOf(number));
+    const withPhoto = shown.filter((leg) => $(`#${leg.id}-photo`).files[0]);
+    withPhoto.forEach((leg) => data.append('photos', $(`#${leg.id}-photo`).files[0]));
+    report.photo_for = withPhoto.map((leg) => shown.indexOf(leg));
     data.set('report', JSON.stringify(report));
     const button = $('#trip-save');
     button.disabled = true;
@@ -1102,12 +1106,14 @@ async function viewEditBus(busNo) {
       </div>
     </form>
     <div class="panel" id="trip-times" style="margin-top:18px">
-      <div class="panel-h"><h2>Trip times</h2><span class="hint">Expected pick-up and drop-off for each trip. Changing them updates the expected times on every daily report, past days too</span></div>
+      <div class="panel-h"><h2>Trip times</h2><span class="hint">Expected pick-up and drop-off for each trip, morning and evening. Changing them updates the expected times on every daily report, past days too</span></div>
       <div class="busform">
-        ${(b.trip_plans || []).map((p) => `<div class="field full" style="display:grid;grid-template-columns:minmax(160px,2fr) 1fr 1fr auto;gap:10px;align-items:end" data-route="${esc(p.route_id)}">
+        ${(b.trip_plans || []).map((p) => `<div class="field full" style="display:grid;grid-template-columns:minmax(140px,1.5fr) repeat(4,1fr) auto;gap:10px;align-items:end" data-route="${esc(p.route_id)}">
           <div><label>Trip ${p.trip_number}</label><div>${esc(p.route_name)}</div></div>
-          <div><label>Expected pick-up</label><input type="time" class="tt-start" value="${esc(p.expected_start)}"></div>
-          <div><label>Expected drop-off</label><input type="time" class="tt-end" value="${esc(p.expected_end)}"></div>
+          <div><label>Morning pick-up</label><input type="time" class="tt-start" value="${esc(p.expected_start)}"></div>
+          <div><label>Morning drop-off</label><input type="time" class="tt-end" value="${esc(p.expected_end)}"></div>
+          <div><label>Evening pick-up</label><input type="time" class="tt-estart" value="${esc(p.expected_evening_start)}"></div>
+          <div><label>Evening drop-off</label><input type="time" class="tt-eend" value="${esc(p.expected_evening_end)}"></div>
           <button class="btn tt-save" type="button">Save</button>
         </div>`).join('') || '<span class="hint">This bus has no trips set up yet.</span>'}
         <div class="error full" id="tt-error" hidden></div>
@@ -1117,7 +1123,7 @@ async function viewEditBus(busNo) {
     const row = btn.closest('[data-route]');
     $('#tt-error').hidden = true;
     try {
-      const r = await putJSON(`/api/routes/${encodeURIComponent(row.dataset.route)}/times`, { expected_start: row.querySelector('.tt-start').value, expected_end: row.querySelector('.tt-end').value });
+      const r = await putJSON(`/api/routes/${encodeURIComponent(row.dataset.route)}/times`, { expected_start: row.querySelector('.tt-start').value, expected_end: row.querySelector('.tt-end').value, expected_evening_start: row.querySelector('.tt-estart').value, expected_evening_end: row.querySelector('.tt-eend').value });
       listsCache = null;
       toast(r.changed ? 'Trip times saved.' : 'Nothing was changed.');
     } catch (err) {

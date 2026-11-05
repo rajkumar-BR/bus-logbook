@@ -113,20 +113,20 @@ test('daily report can be filtered to one bus without including other buses', as
   await assert.rejects(service.getDailyReport('2026-10-23', '2026-10-23', '99'), /not active or does not exist/);
 });
 
-test('daily report rejects discontinuous odometer readings between legs', async () => {
+test('daily report rejects overlapping odometer readings between legs', async () => {
   const storage = memoryStorage({ Buses: [{ bus_no: '01', active: true }] });
   const service = createService(storage, { today: () => '2026-10-23', user: 'test' });
   const trips = [1, 2, 3].map((trip_number) => ({
     origin: `Stop ${trip_number}`,
     destination: `Stop ${trip_number + 1}`,
     scheduled_start: '07:00', actual_start: '07:00', scheduled_end: '08:00', actual_end: '08:00',
-    planned_km: 10, start_odometer_km: trip_number === 2 ? 111 : (trip_number - 1) * 100,
+    planned_km: 10, start_odometer_km: trip_number === 2 ? 50 : (trip_number - 1) * 100,
     end_odometer_km: trip_number * 100,
   }));
   const photos = trips.map((_, index) => ({ originalname: `trip-${index}.jpg`, mimetype: 'image/jpeg', buffer: Buffer.from('image') }));
   await assert.rejects(service.saveDailyReport({
     report_date: '2026-10-23', bus_no: '01', driver_name: 'Driver', income_collected: 0, expenses: 0, trips,
-  }, photos), /Trip 2 must start at the odometer reading where Trip 1 ended/);
+  }, photos), /odometer readings of Trip 2 morning overlap Trip 1 morning/);
 });
 
 test('expense can be added to an existing bus-day, replaced, or create a new one', async () => {
@@ -324,4 +324,25 @@ test('new tyres are added as spares or fitted straight onto a bus', async () => 
   assert.equal(by.X1.status, 'Fitted');
   assert.equal(by.X1.position, 'Front left');
   assert.equal(by.S1.status, 'In stock');
+});
+
+test('a trip has a morning and an evening leg with their own expected times', async () => {
+  const leg = (trip_number, session, o, d, s, e, a, b) => ({ trip_number, session, origin: o, destination: d, planned_km: 20, start_odometer_km: s, end_odometer_km: e, scheduled_start: '00:00', scheduled_end: '23:59', actual_start: a, actual_end: b });
+  const storage = memoryStorage({
+    Buses: [{ bus_no: '01', active: true }],
+    Routes: [{ route_id: 'R01', route_name: 'Kurur', expected_start: '07:00', expected_end: '08:00' }],
+    'Route assignments': [{ bus_no: '01', route_id: 'R01', from_date: '2026-06-01' }],
+  });
+  const service = createService(storage, { today: () => '2026-10-23', user: 'test' });
+  await service.setTripTimes('R01', { expected_start: '07:00', expected_end: '08:00', expected_evening_start: '15:30', expected_evening_end: '16:30' });
+  await assert.rejects(service.saveDailyReport({ report_date: '2026-10-23', bus_no: '01', driver_name: 'D', income_collected: 0, expenses: 0, trips: [leg(1, 'Morning', 'A', 'School', 0, 20, '07:00', '08:00'), leg(1, 'Morning', 'A', 'School', 20, 40, '07:00', '08:00')] }), /entered twice/);
+  const saved = await service.saveDailyReport({ report_date: '2026-10-23', bus_no: '01', driver_name: 'D', income_collected: 0, expenses: 0, trips: [leg(1, 'Morning', 'Kurur', 'School', 100, 120, '07:00', '08:00'), leg(1, 'Evening', 'School', 'Kurur', 120, 140, '15:30', '16:50')] });
+  assert.equal(saved.trip_ids.length, 2);
+  const row = (await service.getDailyReport('2026-10-23', '2026-10-23')).buses[0];
+  assert.equal(row.trip_count, 1); // one trip, two legs
+  assert.equal(row.trips_expected, 1);
+  assert.deepEqual(row.trips.map((t) => [t.session, t.scheduled_start, t.scheduled_end, t.on_time]), [['Morning', '07:00', '08:00', true], ['Evening', '15:30', '16:30', true]]);
+  assert.equal(row.late_trips, 0); // the evening leg ran 20 minutes late but lateness is judged on the morning only
+  assert.equal(row.status, 'On time');
+  assert.equal(row.trips[1].timing_status, 'Lateness not checked');
 });

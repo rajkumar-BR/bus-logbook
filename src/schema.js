@@ -18,7 +18,7 @@ export const TABS = {
   ],
   Routes: [
     ['school_id', 'text'], ['route_id', 'text'], ['route_name', 'text'], ['notes', 'text'],
-    ['expected_start', 'text'], ['expected_end', 'text'],
+    ['expected_start', 'text'], ['expected_end', 'text'], ['expected_evening_start', 'text'], ['expected_evening_end', 'text'],
   ],
   'Route assignments': [
     ['school_id', 'text'], ['bus_no', 'text'], ['route_id', 'text'], ['from_date', 'date'], ['to_date', 'date'],
@@ -32,7 +32,7 @@ export const TABS = {
     ['origin', 'text'], ['destination', 'text'], ['scheduled_start', 'text'], ['actual_start', 'text'], ['scheduled_end', 'text'], ['actual_end', 'text'],
     ['planned_km', 'number'], ['start_odometer_km', 'number'], ['end_odometer_km', 'number'],
     ['actual_km', 'number'], ['extra_km', 'number'], ['late_by_minutes', 'number'], ['on_time', 'bool'],
-    ['photo_link', 'text'], ['notes', 'text'], ['entered_by', 'text'], ['entered_at', 'datetime'],
+    ['photo_link', 'text'], ['notes', 'text'], ['entered_by', 'text'], ['entered_at', 'datetime'], ['session', 'text'],
   ],
   Entries: [
     ['school_id', 'text'], ['entry_id', 'text'], ['bus_no', 'text'], ['kind', 'text'],
