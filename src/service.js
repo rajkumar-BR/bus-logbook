@@ -568,21 +568,48 @@ export function createService(storage, { readBill = null, today = localToday, us
     return { ...result, expense_saved };
   }
 
+  // New tyres enter the system either as spares (common stock) or fitted straight onto a bus.
+  // input: { tyre_nos (spares), make, condition, km_before, fitted?: { bus_no, date, odometer, positions: { 'Front left': 'tyre no', ... } } }
   async function addTyres(input) {
-    const list = (Array.isArray(input.tyre_nos) ? input.tyre_nos : String(input.tyre_nos || '').split(/[\n,;]+/)).map((x) => String(x).trim()).filter(Boolean);
+    const split = (v) => (Array.isArray(v) ? v : String(v || '').split(/[\n,;]+/)).map((x) => String(x).trim()).filter(Boolean);
+    const spares = split(input.tyre_nos);
+    const fit = input.fitted && typeof input.fitted === 'object' ? input.fitted : null;
+    const onBus = fit ? TYRE_POSITIONS.map((position) => ({ position, tyre_no: String(fit.positions?.[position] || '').trim() })).filter((x) => x.tyre_no) : [];
+    const list = [...spares, ...onBus.map((x) => x.tyre_no)];
     if (!list.length) throw new UserError('Enter at least one tyre number.');
     const condition = ['New', 'Retreaded', 'Unknown'].includes(input.condition) ? input.condition : 'Unknown';
     const kmBefore = input.km_before === '' || input.km_before == null ? '' : Number(input.km_before);
     if (kmBefore !== '' && (!Number.isFinite(kmBefore) || kmBefore < 0)) throw new UserError('Km already run must be zero or more.');
     const make = String(input.make || '').trim();
+    const date = fit ? String(fit.date || '').trim() : '';
+    const odometer = fit ? Number(fit.odometer) : 0;
+    if (onBus.length) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00`)) || date > today()) throw new UserError('Choose a valid fitting date that is not in the future.');
+      if (!String(fit.odometer ?? '').trim() || !Number.isFinite(odometer) || odometer < 0) throw new UserError(`Enter Bus ${fit.bus_no || ''}'s odometer reading.`);
+      const bus = (await load()).buses.find((b) => b.bus_no === String(fit.bus_no || '').trim() && b.active !== false);
+      if (!bus) throw new UserError('Choose an active bus to fit the tyres on.');
+      fit.bus_no = bus.bus_no;
+    }
     const now = localNow();
     return storage.transact((tx) => {
       const have = new Set(tx.read('Tyres').map((x) => x.tyre_no.toLowerCase()));
       const dupes = list.filter((x, i) => have.has(x.toLowerCase()) || list.findIndex((y) => y.toLowerCase() === x.toLowerCase()) !== i);
       if (dupes.length) throw new UserError(`Already in the tyre list: ${[...new Set(dupes)].join(', ')}.`);
-      tx.append('Tyres', list.map((tyre_no) => ({ tyre_no, make, condition, km_before: kmBefore, status: 'In stock', notes: '' })));
-      tx.append('Change log', list.map((tyre_no) => ({ timestamp: now, user, action: 'Added', tab: 'Tyres', record_id: tyre_no, field: '', old_value: '', new_value: `${condition}${make ? `, ${make}` : ''}` })));
-      return { added: list.length };
+      const fitments = tx.read('Tyre fitments');
+      if (onBus.length) {
+        const taken = onBus.find((x) => fitments.some((f) => !f.removed_date && f.bus_no === fit.bus_no && f.position === x.position));
+        if (taken) throw new UserError(`Bus ${fit.bus_no} ${taken.position.toLowerCase()} already has a tyre. Use "Move or swap tyres" to change it.`);
+        const last = Math.max(0, ...fitments.filter((f) => f.bus_no === fit.bus_no).flatMap((f) => [Number(f.fitted_km) || 0, Number(f.removed_km) || 0]));
+        if (odometer < last) throw new UserError(`Bus ${fit.bus_no}'s odometer cannot be less than ${last.toLocaleString('en-IN')}, the last reading recorded for it.`);
+      }
+      tx.append('Tyres', list.map((tyre_no) => ({ tyre_no, make, condition, km_before: kmBefore, status: onBus.some((x) => x.tyre_no === tyre_no) ? 'Fitted' : 'In stock', notes: '' })));
+      let n = fitments.length;
+      tx.append('Tyre fitments', onBus.map((x) => ({ fitment_id: `F-${String(++n).padStart(4, '0')}-${x.tyre_no}`, tyre_no: x.tyre_no, bus_no: fit.bus_no, position: x.position, fitted_date: date, fitted_km: odometer, removed_date: '', removed_km: '', removed_to: '' })));
+      tx.append('Change log', list.map((tyre_no) => {
+        const x = onBus.find((y) => y.tyre_no === tyre_no);
+        return { timestamp: now, user, action: 'Added', tab: 'Tyres', record_id: tyre_no, field: '', old_value: '', new_value: `${condition}${make ? `, ${make}` : ''}, ${x ? `Bus ${fit.bus_no} ${x.position}` : 'spare'}` };
+      }));
+      return { added: list.length, fitted: onBus.length, spares: spares.length };
     });
   }
 

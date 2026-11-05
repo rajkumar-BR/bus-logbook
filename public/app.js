@@ -880,6 +880,23 @@ async function viewTyres() {
         <tr class="tyre-hist-row" id="hist-${i}" hidden><td colspan="6">${t.spells.length ? `<table><thead><tr><th>Bus / position</th><th>Fitted</th><th>Removed</th><th>Km</th><th>Km by route</th></tr></thead><tbody>${t.spells.map((s) => `<tr><td>Bus ${esc(s.bus_no)} · ${esc(s.position)}</td><td>${fullDate(s.fitted_date)}<div class="hint">odometer ${Number(s.fitted_km).toLocaleString('en-IN')}</div></td><td>${s.removed_date ? `${fullDate(s.removed_date)}<div class="hint">odometer ${Number(s.removed_km).toLocaleString('en-IN')} · ${esc(s.removed_to)}</div>` : 'Still fitted'}</td><td class="mono">${km(s.km)}<div class="hint">${esc(s.km_from)}</div></td><td>${routesText(s.by_route)}</td></tr>`).join('')}</tbody></table>` : '<span class="hint">Never fitted yet.</span>'}</td></tr>`).join('') || '<tr><td colspan="6" class="hint">No tyres yet. Add them below.</td></tr>'}
       </tbody></table></div>
     </div>
+    <form class="panel" id="add-tyres" style="margin-bottom:18px" novalidate>
+      <div class="panel-h"><h2>Add tyres</h2><span class="hint">Step 1. Every tyre starts either on a bus or as a spare in common stock. After that, use "Move or swap tyres"</span></div>
+      <div class="busform">
+        <div class="error" id="at-error" style="grid-column:1/-1" hidden></div>
+        <div class="field"><label for="at-make">Make</label><input id="at-make" placeholder="e.g. MRF, Apollo"></div>
+        <div class="field"><label for="at-cond">Condition</label><select id="at-cond"><option>New</option><option>Retreaded</option><option selected>Unknown</option></select></div>
+        <div class="field"><label for="at-km">Km already run (if known)</label><input id="at-km" inputmode="numeric" placeholder="0"></div>
+        <div class="field" style="grid-column:1/-1"><label for="at-bus">Fit on a bus</label><select id="at-bus"><option value="">No, add as spares only</option>${busOptions}</select></div>
+        <div id="at-fit" style="grid-column:1/-1;display:none;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px">
+          <div class="field"><label for="at-date">Fitted on</label><input id="at-date" type="date" max="${esc(data.today)}" value="${esc(data.today)}"></div>
+          <div class="field"><label for="at-odo">Bus odometer now (km)</label><input id="at-odo" inputmode="decimal"></div>
+          ${data.positions.map((p, i) => `<div class="field"><label for="at-pos-${i}">${esc(p)}</label><input id="at-pos-${i}" data-pos="${esc(p)}" placeholder="tyre no." autocomplete="off"></div>`).join('')}
+        </div>
+        <div class="field" style="grid-column:1/-1"><label for="at-nos">Spare tyres (common stock), one tyre number per line</label><textarea id="at-nos" rows="3" placeholder="30294492023&#10;30159451923"></textarea></div>
+        <div class="btns" style="grid-column:1/-1"><button class="btn" type="submit">Add tyres</button></div>
+      </div>
+    </form>
     <form class="panel" id="move-form" style="margin-bottom:18px" novalidate>
       <div class="panel-h"><h2>Move or swap tyres</h2><span class="hint">List every tyre that changes place. Example: tyre A goes to the retreader, stock tyre C is fitted on that bus in its place</span></div>
       <div class="busform">
@@ -900,17 +917,6 @@ async function viewTyres() {
         <div class="field"><label for="rt-co">Retread company</label><input id="rt-co"></div>
         <div class="field"><label for="rt-cost">Cost (₹)</label><input id="rt-cost" inputmode="decimal"></div>
         <div class="btns" style="grid-column:1/-1"><button class="btn" type="submit">Save</button></div>
-      </div>
-    </form>
-    <form class="panel" id="add-tyres" novalidate>
-      <div class="panel-h"><h2>Add tyres</h2><span class="hint">One tyre number per line. Then use "Move or swap tyres" to fit them on a bus</span></div>
-      <div class="busform">
-        <div class="error" id="at-error" style="grid-column:1/-1" hidden></div>
-        <div class="field" style="grid-column:1/-1"><label for="at-nos">Tyre numbers</label><textarea id="at-nos" rows="4" placeholder="30294492023&#10;30159451923"></textarea></div>
-        <div class="field"><label for="at-make">Make</label><input id="at-make" placeholder="e.g. MRF, Apollo"></div>
-        <div class="field"><label for="at-cond">Condition</label><select id="at-cond"><option>New</option><option>Retreaded</option><option selected>Unknown</option></select></div>
-        <div class="field"><label for="at-km">Km already run (if known)</label><input id="at-km" inputmode="numeric" placeholder="0"></div>
-        <div class="btns" style="grid-column:1/-1"><button class="btn" type="submit">Add tyres</button></div>
       </div>
     </form>`;
   document.querySelectorAll('.tyre-hist').forEach((b) => b.addEventListener('click', () => { const r = $(`#hist-${b.dataset.i}`); r.hidden = !r.hidden; }));
@@ -969,12 +975,18 @@ async function viewTyres() {
       router();
     } catch (e) { err.textContent = e.message; err.hidden = false; }
   });
+  $('#at-bus').addEventListener('change', (ev) => { $('#at-fit').style.display = ev.target.value ? 'grid' : 'none'; });
   $('#add-tyres').addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const err = $('#at-error'); err.hidden = true;
+    const body = { tyre_nos: $('#at-nos').value, make: $('#at-make').value, condition: $('#at-cond').value, km_before: $('#at-km').value };
+    if ($('#at-bus').value) {
+      body.fitted = { bus_no: $('#at-bus').value, date: $('#at-date').value, odometer: $('#at-odo').value, positions: {} };
+      document.querySelectorAll('#at-fit [data-pos]').forEach((i) => { body.fitted.positions[i.dataset.pos] = i.value; });
+    }
     try {
-      const r = await postJSON('/api/tyres', { tyre_nos: $('#at-nos').value, make: $('#at-make').value, condition: $('#at-cond').value, km_before: $('#at-km').value });
-      toast(`Added ${r.added} tyre${r.added === 1 ? '' : 's'}.`);
+      const r = await postJSON('/api/tyres', body);
+      toast(`Added ${r.added} tyre${r.added === 1 ? '' : 's'}: ${r.fitted} on the bus, ${r.spares} spare.`);
       router();
     } catch (e) { err.textContent = e.message; err.hidden = false; }
   });

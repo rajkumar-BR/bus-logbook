@@ -311,3 +311,17 @@ test('tyres stay on their bus; retreads come back to stock and can go to any bus
   assert.equal(by.C.bus_no, '01');
   assert.equal(by.C.total_km, 15);
 });
+
+test('new tyres are added as spares or fitted straight onto a bus', async () => {
+  const service = createService(memoryStorage({ Buses: [{ bus_no: '01', active: true }] }), { today: () => '2026-10-23', user: 'test' });
+  await assert.rejects(service.addTyres({ tyre_nos: '' }), /at least one/);
+  await assert.rejects(service.addTyres({ fitted: { bus_no: '01', date: '2026-10-20', odometer: '', positions: { 'Front left': 'X1' } } }), /odometer/);
+  const r = await service.addTyres({ tyre_nos: 'S1\nS2', condition: 'New', fitted: { bus_no: '01', date: '2026-10-20', odometer: 5000, positions: { 'Front left': 'X1', 'Front right': 'X2' } } });
+  assert.deepEqual(r, { added: 4, fitted: 2, spares: 2 });
+  await assert.rejects(service.addTyres({ fitted: { bus_no: '01', date: '2026-10-20', odometer: 5000, positions: { 'Front left': 'X9' } } }), /already has a tyre/);
+  await assert.rejects(service.addTyres({ tyre_nos: 'S1' }), /Already in the tyre list/);
+  const by = Object.fromEntries((await service.getTyres()).tyres.map((x) => [x.tyre_no, x]));
+  assert.equal(by.X1.status, 'Fitted');
+  assert.equal(by.X1.position, 'Front left');
+  assert.equal(by.S1.status, 'In stock');
+});
