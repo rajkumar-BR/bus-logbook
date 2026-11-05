@@ -319,3 +319,22 @@ ol.logs{list-style:none;margin:0;padding:0}
 .logdetail{list-style:none;margin:4px 0 0;padding:0;display:flex;flex-direction:column;gap:2px;font-size:14px}
 .logwhen,.logwho{font-size:12px;white-space:nowrap}
 @media (max-width:640px){.logrow{grid-template-columns:1fr}.logwho,.logwhen{white-space:normal}}
+
+/* Edit bus: trip times */
+.tt-body{padding:16px;display:grid;gap:14px}
+.tt-bar{display:flex;gap:20px;align-items:end;flex-wrap:wrap}
+.tt-bar .field{width:200px}
+.tt-check{display:flex;gap:8px;align-items:center;font-size:14px;font-weight:500;padding-bottom:10px}
+.tt-check input{width:auto}
+.tt-note{margin:0}
+.tt-sat{margin:6px 0 0}
+.tt-card{border:1px solid var(--line);border-radius:8px;padding:14px 16px;display:grid;gap:12px}
+.tt-title{font-family:var(--display);font-weight:700;color:var(--ink)}
+.tt-cols{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.tt-col{display:grid;gap:10px;align-content:start;padding:12px;background:var(--bg,transparent);border:1px solid var(--line);border-radius:6px}
+.tt-col h4{margin:0;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.tt-pair{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.tt-col input[readonly]{background:transparent;color:var(--muted)}
+.tt-hist{margin:0}
+.tt-actions{display:flex;justify-content:flex-start}
+@media (max-width:700px){.tt-cols{grid-template-columns:1fr}}

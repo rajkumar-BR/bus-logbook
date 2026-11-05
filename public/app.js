@@ -1110,6 +1110,29 @@ async function viewChangeLog() {
 
 // ---------- Edit a bus
 
+// One trip's settings: a morning column (first stop to school) and an evening column (school back to the first stop).
+function ttCard(p, title, sat) {
+  const hist = (p.history || []).length ? `<div class="hint tt-hist">Changes so far: ${p.history.map((h) => `from ${fullDate(h.effective_from)}: ${esc(h.start_stop)} ${esc(h.expected_start)}–${esc(h.expected_end)}, ${esc(h.planned_km)} km`).join(' · ')}</div>` : '';
+  return `<div class="tt-card" data-route="${esc(p.route_id)}" ${sat ? 'data-sat="1"' : ''}>
+    <div class="tt-title">${esc(title)}</div>
+    <div class="tt-cols">
+      <div class="tt-col"><h4>Morning</h4>
+        <div class="field"><label>From (first stop)</label><input class="tt-from" value="${esc(p.start_stop)}"></div>
+        <div class="field"><label>To</label><input value="School" readonly></div>
+        <div class="tt-pair"><div class="field"><label>Pick-up</label><input type="time" class="tt-start" value="${esc(p.expected_start)}"></div><div class="field"><label>Drop-off</label><input type="time" class="tt-end" value="${esc(p.expected_end)}"></div></div>
+        <div class="field"><label>Planned km</label><input type="number" min="0" step="0.1" class="tt-km" value="${esc(p.planned_km)}"></div>
+      </div>
+      <div class="tt-col"><h4>Evening</h4>
+        <div class="field"><label>From</label><input value="School" readonly></div>
+        <div class="field"><label>To (first stop)</label><input value="${esc(p.start_stop)}" readonly title="Same as the morning first stop"></div>
+        <div class="tt-pair"><div class="field"><label>Pick-up</label><input type="time" class="tt-estart" value="${esc(p.expected_evening_start)}"></div><div class="field"><label>Drop-off</label><input type="time" class="tt-eend" value="${esc(p.expected_evening_end)}"></div></div>
+        <div class="field"><label>Planned km</label><input type="number" min="0" step="0.1" class="tt-ekm" value="${esc(p.planned_evening_km)}" placeholder="same as morning"></div>
+      </div>
+    </div>
+    ${hist}
+  </div>`;
+}
+
 async function viewEditBus(busNo) {
   const { bus: b } = await api(`/api/buses/${encodeURIComponent(busNo)}`);
   main.innerHTML = `
@@ -1131,56 +1154,43 @@ async function viewEditBus(busNo) {
       </div>
     </form>
     <div class="panel" id="trip-times" style="margin-top:18px">
-      <div class="panel-h"><h2>Trip times</h2><span class="hint">Stops, expected pick-up and drop-off times and planned km for each trip, morning and evening. The morning runs from the first stop to school, the evening from school to the last drop-off</span></div>
-      <div class="busform">
-        <div class="field full" style="display:flex;gap:16px;align-items:end;flex-wrap:wrap">
-          <div><label for="tt-from-date">Change applies from</label><input id="tt-from-date" type="date" value="${(() => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`; })()}"></div>
-          <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="tt-all"> Apply to all days, past ones too (to fill in or correct a trip)</label>
+      <div class="panel-h"><h2>Trip times</h2><span class="hint">Stops, pick-up and drop-off times and planned km for each trip. The morning runs from the first stop to school; the evening is the way back, from school to the first stop</span></div>
+      <div class="tt-body">
+        ${(b.trip_plans || []).map((p) => ttCard(p, `Trip ${p.trip_number} · ${p.route_name.replace(/^Trip \d+:\s*/, '')}`, false)).join('') || '<span class="hint">This bus has no trips set up yet.</span>'}
+        ${b.saturday_plan ? `<h3 class="tt-sat">Saturday</h3><p class="hint tt-note">On Saturdays this bus runs one combined trip: the same first stop, straight to school, and the same way back in the evening. Until this is set, Saturdays show the normal trips.</p>${ttCard(b.saturday_plan, b.saturday_plan.route_name.replace(/^Trip \d+:\s*/, ''), true)}` : ''}
+        <div class="tt-bar">
+          <div class="field"><label for="tt-from-date">Change applies from</label><input id="tt-from-date" type="date" value="${(() => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`; })()}"></div>
+          <label class="tt-check"><input type="checkbox" id="tt-all"> Apply to all days, past ones too <span class="hint">(to fill in or correct a trip)</span></label>
         </div>
-        <div class="hint full">When a bus changes its stops, set the date the change starts. Days before it keep the old stops, times and planned km; that day and later days use the new ones.</div>
-        ${(b.trip_plans || []).map((p) => `<div class="field full" style="display:grid;grid-template-columns:minmax(140px,1.5fr) repeat(8,minmax(90px,1fr)) auto;gap:10px;align-items:end" data-route="${esc(p.route_id)}">
-          <div><label>Trip ${p.trip_number}</label><div>${esc(p.route_name)}</div></div>
-          <div><label>Morning pick-up</label><input type="time" class="tt-start" value="${esc(p.expected_start)}"></div>
-          <div><label>Morning drop-off</label><input type="time" class="tt-end" value="${esc(p.expected_end)}"></div>
-          <div><label>Evening pick-up</label><input type="time" class="tt-estart" value="${esc(p.expected_evening_start)}"></div>
-          <div><label>Evening drop-off</label><input type="time" class="tt-eend" value="${esc(p.expected_evening_end)}"></div>
-          <div><label>First stop</label><input class="tt-from" value="${esc(p.start_stop)}"></div>
-          <div><label>Last drop-off</label><input class="tt-to" value="${esc(p.end_stop)}"></div>
-          <div><label>Morning planned km</label><input type="number" min="0" step="0.1" class="tt-km" value="${esc(p.planned_km)}"></div>
-          <div><label>Evening planned km</label><input type="number" min="0" step="0.1" class="tt-ekm" value="${esc(p.planned_evening_km)}" placeholder="same as morning"></div>
-          <button class="btn tt-save" type="button">Save</button>
-          ${(p.history || []).length ? `<div class="hint" style="grid-column:1/-1">Changes so far: ${p.history.map((h) => `from ${fullDate(h.effective_from)}: ${esc([h.start_stop, h.end_stop && h.end_stop !== h.start_stop ? `→ ${h.end_stop}` : ''].filter(Boolean).join(' '))} ${esc(h.expected_start)}–${esc(h.expected_end)}, ${esc(h.planned_km)} km`).join(' · ')}</div>` : ''}
-        </div>`).join('') || '<span class="hint">This bus has no trips set up yet.</span>'}
-        ${b.saturday_plan ? `<div class="full" style="margin-top:6px"><h3 style="margin:8px 0 2px">Saturday</h3><div class="hint">On Saturdays this bus runs one combined trip: the same first stop, straight to school, and in the evening from school to the last drop-off. Until this is set, Saturdays show the normal trips.</div></div>
-        ${[b.saturday_plan].map((p) => `<div class="field full" style="display:grid;grid-template-columns:minmax(140px,1.5fr) repeat(8,minmax(90px,1fr)) auto;gap:10px;align-items:end" data-route="${esc(p.route_id)}" data-sat="1">
-          <div><label>Saturday trip</label><div>${esc(p.route_name)}</div></div>
-          <div><label>Morning pick-up</label><input type="time" class="tt-start" value="${esc(p.expected_start)}"></div>
-          <div><label>Morning drop-off</label><input type="time" class="tt-end" value="${esc(p.expected_end)}"></div>
-          <div><label>Evening pick-up</label><input type="time" class="tt-estart" value="${esc(p.expected_evening_start)}"></div>
-          <div><label>Evening drop-off</label><input type="time" class="tt-eend" value="${esc(p.expected_evening_end)}"></div>
-          <div><label>First stop</label><input class="tt-from" value="${esc(p.start_stop)}"></div>
-          <div><label>Last drop-off</label><input class="tt-to" value="${esc(p.end_stop)}"></div>
-          <div><label>Morning planned km</label><input type="number" min="0" step="0.1" class="tt-km" value="${esc(p.planned_km)}"></div>
-          <div><label>Evening planned km</label><input type="number" min="0" step="0.1" class="tt-ekm" value="${esc(p.planned_evening_km)}" placeholder="same as morning"></div>
-          <button class="btn tt-save" type="button">Save</button>
-          ${(p.history || []).length ? `<div class="hint" style="grid-column:1/-1">Changes so far: ${p.history.map((h) => `from ${fullDate(h.effective_from)}: ${esc([h.start_stop, h.end_stop && h.end_stop !== h.start_stop ? `→ ${h.end_stop}` : ''].filter(Boolean).join(' '))} ${esc(h.expected_start)}–${esc(h.expected_end)}, ${esc(h.planned_km)} km`).join(' · ')}</div>` : ''}
-        </div>`).join('')}` : ''}
-        <div class="error full" id="tt-error" hidden></div>
+        <p class="hint tt-note">When a bus changes its stops, set the date the change starts. Days before it keep the old stops, times and planned km; that day and later days use the new ones.</p>
+        <div class="tt-actions"><button class="btn" type="button" id="tt-save">Save</button></div>
+        <div class="error" id="tt-error" hidden></div>
       </div>
     </div>`;
-  document.querySelectorAll('#trip-times .tt-save').forEach((btn) => btn.addEventListener('click', async () => {
-    const row = btn.closest('[data-route]');
+  $('#tt-save').addEventListener('click', async () => {
     $('#tt-error').hidden = true;
+    const button = $('#tt-save');
+    button.disabled = true;
     try {
-      const r = await putJSON(`/api/routes/${encodeURIComponent(row.dataset.route)}/times`, { expected_start: row.querySelector('.tt-start').value, expected_end: row.querySelector('.tt-end').value, expected_evening_start: row.querySelector('.tt-estart').value, expected_evening_end: row.querySelector('.tt-eend').value, planned_km: row.querySelector('.tt-km').value, planned_evening_km: row.querySelector('.tt-ekm').value, start_stop: row.querySelector('.tt-from').value, end_stop: row.querySelector('.tt-to').value, effective_from: $('#tt-from-date').value, all_days: $('#tt-all').checked, ...(row.dataset.sat ? { day_type: 'Saturday' } : {}) });
+      let changed = 0;
+      let last = null;
+      for (const row of document.querySelectorAll('#trip-times .tt-card')) {
+        // an empty Saturday plan is left alone, so saving the weekday trips does not start one
+        if (row.dataset.sat && !['.tt-start', '.tt-end', '.tt-estart', '.tt-eend', '.tt-km', '.tt-ekm'].some((c) => row.querySelector(c).value)) continue;
+        const r = await putJSON(`/api/routes/${encodeURIComponent(row.dataset.route)}/times`, { expected_start: row.querySelector('.tt-start').value, expected_end: row.querySelector('.tt-end').value, expected_evening_start: row.querySelector('.tt-estart').value, expected_evening_end: row.querySelector('.tt-eend').value, planned_km: row.querySelector('.tt-km').value, planned_evening_km: row.querySelector('.tt-ekm').value, start_stop: row.querySelector('.tt-from').value, effective_from: $('#tt-from-date').value, all_days: $('#tt-all').checked, ...(row.dataset.sat ? { day_type: 'Saturday' } : {}) });
+        changed += r.changed;
+        if (r.changed) last = r;
+      }
       listsCache = null;
-      toast(!r.changed ? 'Nothing was changed.' : r.effective_from && r.effective_from < '2001-01-01' ? 'Saved for every Saturday.' : r.effective_from ? `Saved. It applies from ${fullDate(r.effective_from)}.` : 'Saved for all days.');
-      if (r.changed) router();
+      toast(!changed ? 'Nothing was changed.' : $('#tt-all').checked ? 'Saved for all days.' : `Saved. It applies from ${fullDate($('#tt-from-date').value)}.`);
+      if (changed) router();
     } catch (err) {
       $('#tt-error').textContent = err.message;
       $('#tt-error').hidden = false;
+    } finally {
+      button.disabled = false;
     }
-  }));
+  });
   $('#editform').addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const body = {

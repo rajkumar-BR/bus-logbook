@@ -508,11 +508,13 @@ export function createService(storage, { readBill = null, today = localToday, us
     return storage.transact((tx) => {
       const route = tx.read('Routes').find((r) => r.route_id === routeId);
       if (!route) throw new UserError('There is no such trip.', 404);
+      // the first stop shown when none is set is the one read from the route details, so showing it back is not a change
+      const shown = (src, k) => ((src[k] ?? '') === '' && k === 'start_stop' ? firstStopOf(route).trim() : (src[k] ?? ''));
       const log = [];
       if (!from && !saturday) {
         for (const [field, v] of Object.entries(vals)) {
           if (!given[field]) continue;
-          if (String(route[field] ?? '') !== String(v)) log.push({ timestamp: now, user, action: 'Updated', tab: 'Routes', record_id: routeId, field, old_value: String(route[field] ?? ''), new_value: String(v) });
+          if (String(shown(route, field)) !== String(v)) log.push({ timestamp: now, user, action: 'Updated', tab: 'Routes', record_id: routeId, field, old_value: String(shown(route, field)), new_value: String(v) });
         }
         if (!log.length) return { route_id: routeId, changed: 0 };
         tx.update('Routes', (r) => r.route_id === routeId, Object.fromEntries(Object.entries(vals).filter(([k]) => given[k])));
@@ -526,7 +528,7 @@ export function createService(storage, { readBill = null, today = localToday, us
       const row = { route_id: routeId, effective_from: from, day_type: kind, changed_by: user, changed_at: now };
       for (const k of Object.keys(vals)) row[k] = given[k] ? vals[k] : (before[k] ?? '');
       for (const k of Object.keys(vals)) {
-        if (String(before[k] ?? '') !== String(row[k])) log.push({ timestamp: now, user, action: 'Updated', tab: 'Trip settings', record_id: `${routeId}${saturday ? ' Saturdays' : ''} from ${from}`, field: k, old_value: String(before[k] ?? ''), new_value: String(row[k]) });
+        if (String(shown(before, k)) !== String(row[k])) log.push({ timestamp: now, user, action: 'Updated', tab: 'Trip settings', record_id: `${routeId}${saturday ? ' Saturdays' : ''} from ${from}`, field: k, old_value: String(shown(before, k)), new_value: String(row[k]) });
       }
       const same = rows.find((x) => x.effective_from === from);
       if (!log.length && !same) return { route_id: routeId, changed: 0 };
