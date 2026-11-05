@@ -310,6 +310,14 @@ test('tyres stay on their bus; retreads come back to stock and can go to any bus
   assert.equal(by.A.status, 'In repair');
   assert.equal(by.C.bus_no, '01');
   assert.equal(by.C.total_km, 15);
+  // the retread cost shows in the bus it came off (bus 1), not the bus that now has the tyre
+  const bus1 = await service.getBus('01');
+  assert.deepEqual(bus1.entries.map((e) => [e.kind, e.title, e.total_cost, e.workshop]), [['Tyre retread', 'Tyre retread', 4500, 'Green Retreads']]);
+  assert.equal(bus1.facts.spent_year, 4500);
+  assert.equal((await service.getBus('02')).entries.length, 0);
+  // tyre changes per bus: tyres taken off for repair, retreading or scrap; a tyre moved to another wheel is not one
+  const fleet = Object.fromEntries((await service.getFleet()).buses.map((b) => [b.bus_no, b.tyre_changes]));
+  assert.deepEqual(fleet, { '01': 1, '02': 1 });
 });
 
 test('new tyres are added as spares or fitted straight onto a bus', async () => {

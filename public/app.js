@@ -11,7 +11,7 @@ const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
 const kmText = (n) => (n === null || n === undefined || n === '' ? '—' : `${Number(n).toLocaleString('en-IN')} km`);
 const fullDate = (d) => (d ? `${Number(d.slice(8, 10))} ${MONTHS[Number(d.slice(5, 7)) - 1]} ${d.slice(0, 4)}` : '—');
 const dayMonth = (d) => (d ? `${Number(d.slice(8, 10))} ${MONTHS[Number(d.slice(5, 7)) - 1]}` : '');
-const kindKey = (k) => ({ Breakdown: 'breakdown', Repair: 'repair', 'Scheduled service': 'service', Inspection: 'inspection' }[k] || 'inspection');
+const kindKey = (k) => ({ Breakdown: 'breakdown', Repair: 'repair', 'Scheduled service': 'service', Inspection: 'inspection', 'Tyre retread': 'tyre' }[k] || 'inspection');
 const STATUS_PILL = { 'On route': 'ok', 'In workshop': 'crit', 'Out of service': 'warn' };
 const pill = (status) => `<span class="pill ${STATUS_PILL[status] || 'warn'}"><i></i>${esc(status)}</span>`;
 const REPEAT_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 12a8 8 0 0 1 14-5.3M20 12a8 8 0 0 1-14 5.3"/><path d="M18 3v4h-4M6 21v-4h4"/></svg>';
@@ -154,12 +154,13 @@ async function viewFleet() {
     <div class="panel">
       <div class="panel-h"><h2>All buses</h2><span class="hint">Service due: every 10,000 km or 90 days unless set per bus</span></div>
       <div class="tbl-wrap"><table class="fleet">
-        <thead><tr><th>Bus</th><th>Route</th><th>Status</th><th>Last service</th><th>Next service</th><th>Spent in ${esc(s.year)}</th><th>Repairs · 12 mo</th><th>Watch</th></tr></thead>
+        <thead><tr><th>Bus</th><th>Route</th><th>Status</th><th>Tyre changes</th><th>Last service</th><th>Next service</th><th>Spent in ${esc(s.year)}</th><th>Repairs · 12 mo</th><th>Watch</th></tr></thead>
         <tbody>${d.buses.map((b) => `
           <tr data-go="#bus/${encodeURIComponent(b.bus_no)}" tabindex="0">
             <td><span class="busno">${esc(b.bus_no)}</span></td>
             <td>${esc(b.route || '—')}<div class="route">${esc([b.make_model, b.year].filter(Boolean).join(' · '))}</div></td>
             <td>${pill(b.status)}</td>
+            <td class="mono">${b.tyre_changes}</td>
             <td>${fullDate(b.last_service)}</td>
             <td>${serviceCell(b.service, b.status)}</td>
             <td class="mono">${inr(b.spent_year)}</td>
@@ -438,7 +439,7 @@ function eventItem(e) {
   const links = [
     e.bill_url ? `<a href="${esc(e.bill_url)}" target="_blank" rel="noopener">View bill</a>` : '<span class="hint">No bill attached</span>',
     ...e.photo_urls.map((u, i) => `<a href="${esc(u)}" target="_blank" rel="noopener">Photo ${i + 1}</a>`),
-    `<button type="button" data-go="#correct/${encodeURIComponent(e.entry_id)}">Correct this entry</button>`,
+    ...(e.kind === 'Tyre retread' ? [] : [`<button type="button" data-go="#correct/${encodeURIComponent(e.entry_id)}">Correct this entry</button>`]),
     `<button type="button" class="danger" data-void="${esc(e.entry_id)}">Remove entry</button>`,
   ];
   return `<li class="ev" data-kind="${k}">
@@ -453,7 +454,7 @@ function eventItem(e) {
       </dl>
       ${e.between ? `<div class="between">Repairs since the previous service${e.between.since ? ` (${fullDate(e.between.since)})` : ''}: <b>${inr(e.between.total)}</b> across ${e.between.jobs} job${e.between.jobs === 1 ? '' : 's'}</div>` : ''}
       <div class="ev-meta"><span class="mono">${kmText(e.odometer_km)}</span>${e.workshop ? `<span>${esc(e.workshop)}${e.bill_no ? ` · bill ${esc(e.bill_no)}` : ''}</span>` : ''}<span>${inr(e.total_cost)}</span>
-        <span>${e.date_out ? `Off road: ${e.days_off_road === 0 ? 'same day' : `${e.days_off_road} day${e.days_off_road === 1 ? '' : 's'}`}` : 'Still in workshop'}</span>
+        ${e.kind === 'Tyre retread' ? '' : `<span>${e.date_out ? `Off road: ${e.days_off_road === 0 ? 'same day' : `${e.days_off_road} day${e.days_off_road === 1 ? '' : 's'}`}` : 'Still in workshop'}</span>`}
         ${e.route_name ? `<span>Route: ${esc(e.route_name)}</span>` : ''}<span class="mono">${esc(e.entry_id)}</span></div>
       <div class="ev-links">${links.join('')}</div>
     </div></li>`;
@@ -499,7 +500,7 @@ async function viewBus(busNo) {
       <div class="panel">
         <div class="panel-h"><h2>Service history</h2>
           <div class="filters" id="ev-filters">
-            ${[['all', 'All'], ['breakdown', 'Breakdowns'], ['repair', 'Repairs'], ['service', 'Scheduled service'], ['inspection', 'Inspections']].map(([k, l], i) => `<button class="fbtn" aria-pressed="${i === 0}" data-f="${k}">${l}</button>`).join('')}
+            ${[['all', 'All'], ['breakdown', 'Breakdowns'], ['repair', 'Repairs'], ['service', 'Scheduled service'], ['inspection', 'Inspections'], ['tyre', 'Tyre retreads']].map(([k, l], i) => `<button class="fbtn" aria-pressed="${i === 0}" data-f="${k}">${l}</button>`).join('')}
           </div></div>
         ${d.entries.length ? `<ol class="timeline" id="timeline">${d.entries.map(eventItem).join('')}</ol><p class="hint" id="tl-empty" style="padding:0 16px 16px" hidden>No entries of this type.</p>`
           : `<div class="empty"><b>No entries yet</b><span>Use "Enter a bill for this bus" above to add the first one.</span></div>`}

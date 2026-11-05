@@ -41,6 +41,8 @@ export function createService(storage, { readBill = null, today = localToday, us
     };
   }
 
+  // Written by "Retread came back" so the cost shows in the bus's history and spending. Not a kind that can be chosen on the bill form.
+  const TYRE_RETREAD = 'Tyre retread';
   const activeBuses = (d) => d.buses.filter((b) => b.active !== false); // blank counts as active
   const routeName = (d, id) => (d.routes.find((r) => r.route_id === id) || {}).route_name || id || '';
   // A bus can run several trips to different places: show every route it is on today.
@@ -55,6 +57,7 @@ export function createService(storage, { readBill = null, today = localToday, us
   function entryTitle(e, parts) {
     if (e.kind === KINDS.SERVICE) return 'Scheduled service';
     if (e.kind === KINDS.INSPECTION) return 'Inspection';
+    if (e.kind === TYRE_RETREAD) return 'Tyre retread';
     if (parts.length) return parts.map((p) => p.part_name).slice(0, 3).join(', ');
     return e.system || e.kind;
   }
@@ -141,6 +144,9 @@ export function createService(storage, { readBill = null, today = localToday, us
     const d = await load();
     const t = today();
     const year = t.slice(0, 4);
+    // a tyre change is a tyre taken off the bus for repair, retreading or scrap (moving it to another wheel is not one)
+    const fitments = await storage.read('Tyre fitments');
+    const tyreChanges = (busNo) => fitments.filter((f) => f.bus_no === busNo && f.removed_date && f.removed_to && f.removed_to !== 'Position changed').length;
     const rows = activeBuses(d).map((b) => {
       const be = d.entries.filter((e) => e.bus_no === b.bus_no);
       const svc = L.serviceStatus(b, be, d.settings, t);
@@ -149,6 +155,7 @@ export function createService(storage, { readBill = null, today = localToday, us
       const f = L.findings({ bus: b, busEntries: be, busParts: d.parts.filter((p) => p.bus_no === b.bus_no), allEntries: d.entries, allParts: d.parts, activeBusCount: activeBuses(d).length, routes: d.routes, today: t });
       return {
         bus_no: b.bus_no,
+        tyre_changes: tyreChanges(b.bus_no),
         route: currentRoute(d, b.bus_no),
         make_model: b.make_model,
         year: b.year,
@@ -670,6 +677,14 @@ export function createService(storage, { readBill = null, today = localToday, us
       const n = tx.read('Tyre retreads').length + 1;
       tx.append('Tyre retreads', [{ retread_id: `RT-${String(n).padStart(4, '0')}-${tyre.tyre_no}`, tyre_no: tyre.tyre_no, returned_date: date, company, cost, bus_no, notes: '' }]);
       tx.update('Tyres', (x) => x.tyre_no === tyre.tyre_no, { status: 'In stock', condition: 'Retreaded' });
+      if (bus_no && cost > 0) {
+        const entryId = `E-${date}-${bus_no}-RT${String(n).padStart(4, '0')}`;
+        tx.append('Entries', [{
+          entry_id: entryId, bus_no, kind: TYRE_RETREAD, date_in: date, date_out: date, days_off_road: 0, system: 'Tyres & alignment',
+          problem_reported: `Tyre ${tyre.tyre_no} retreaded`, workshop: company, total_cost: cost, labour_cost: 0, is_repeat: false,
+          route_at_time: '', record_status: '', entered_by: user, entered_at: now,
+        }]);
+      }
       tx.append('Change log', [{ timestamp: now, user, action: 'Retreaded', tab: 'Tyres', record_id: tyre.tyre_no, field: 'status', old_value: 'At retreader', new_value: `In stock${company ? `, ${company}` : ''}${cost ? `, Rs ${cost}` : ''}` }]);
       return { tyre_no: tyre.tyre_no, bus_no };
     });
