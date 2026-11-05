@@ -80,9 +80,13 @@ h2{font-family:var(--display);font-stretch:85%;font-weight:700;font-size:18px;ma
 /* Fleet table */
 .tbl-wrap{overflow-x:auto}
 .report-panel{margin-bottom:18px}
-.report-filter{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 16px}
+.report-filter{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;align-items:end;margin:0 0 16px}
+.report-filter .fgroup{display:flex;flex-direction:column;gap:4px;min-width:0}
+.report-filter .fgroup select,.report-filter .fgroup input{width:100%}
+.report-filter .btn{justify-self:start}
+@media(max-width:640px){.report-filter{grid-template-columns:1fr}}
 .report-filter label{font-size:12px;font-weight:600;color:var(--muted)}
-.report-filter input{min-width:170px}
+.report-filter input{min-width:0}
 .report-status{display:inline-block;padding:3px 8px;font-size:12px;font-weight:600;border-radius:4px}
 .report-status.ontime{color:var(--ok);background:var(--ok-soft)}
 .report-status.late{color:var(--crit);background:var(--crit-soft)}
