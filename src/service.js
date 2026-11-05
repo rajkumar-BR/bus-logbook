@@ -71,7 +71,7 @@ export function createService(storage, { readBill = null, today = localToday, us
       .filter((a) => a.bus_no === busNo && a.from_date && a.from_date <= t && (!a.to_date || a.to_date >= t))
       .map((a, i) => {
         const r = d.routes.find((x) => x.route_id === a.route_id) || {};
-        return { trip_number: i + 1, route_id: a.route_id, route_name: r.route_name || a.route_id, expected_start: r.expected_start || '', expected_end: r.expected_end || '', expected_evening_start: r.expected_evening_start || '', expected_evening_end: r.expected_evening_end || '' };
+        return { trip_number: i + 1, route_id: a.route_id, route_name: r.route_name || a.route_id, expected_start: r.expected_start || '', expected_end: r.expected_end || '', expected_evening_start: r.expected_evening_start || '', expected_evening_end: r.expected_evening_end || '', planned_km: r.planned_km ?? '', planned_evening_km: r.planned_evening_km ?? '' };
       });
   };
   // A trip has a morning leg (first stop to school) and an evening leg (school to the drop-offs). Older records have no session and are morning legs.
@@ -79,7 +79,9 @@ export function createService(storage, { readBill = null, today = localToday, us
   const sessionOf = (t) => (t.session === 'Evening' ? 'Evening' : 'Morning');
   // Lateness is judged on the morning leg only. Extra km counts on both legs.
   const metricsFor = (trip) => (sessionOf(trip) === 'Evening' ? { ...L.tripMetrics(trip), on_time: true, late_by_minutes: 0 } : L.tripMetrics(trip));
-  const expectedFor = (plan, session) => (plan ? (session === 'Evening' ? { start: plan.expected_evening_start, end: plan.expected_evening_end } : { start: plan.expected_start, end: plan.expected_end }) : {});
+  // Expected times and planned km are set once per trip (Edit bus → Trip times) and read for every day.
+  const expectedFor = (plan, session) => (plan ? (session === 'Evening' ? { start: plan.expected_evening_start, end: plan.expected_evening_end, km: plan.planned_evening_km } : { start: plan.expected_start, end: plan.expected_end, km: plan.planned_km }) : {});
+  const hasKm = (v) => v !== '' && v != null && Number(v) > 0;
   const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
   // ---------- reads
@@ -254,7 +256,9 @@ export function createService(storage, { readBill = null, today = localToday, us
           if (HHMM.test(exp.start)) trip.scheduled_start = exp.start;
           if (HHMM.test(exp.end)) trip.scheduled_end = exp.end;
           trip.session = sessionOf(saved);
-          Object.assign(trip, metricsFor(trip), { extra_km: saved.extra_km, actual_km: saved.actual_km });
+          trip.planned_from_plan = hasKm(exp.km);
+          if (trip.planned_from_plan) trip.planned_km = Number(exp.km);
+          Object.assign(trip, metricsFor(trip), trip.planned_from_plan ? {} : { extra_km: saved.extra_km, actual_km: saved.actual_km });
           return {
             ...trip,
             photo_url: storage.fileUrl(trip.photo_link),
@@ -338,7 +342,7 @@ export function createService(storage, { readBill = null, today = localToday, us
       actual_start: String(item.actual_start || '').trim(),
       scheduled_end: HHMM.test(expectedFor(plansNow[Number(item.trip_number || index + 1) - 1], item.session).end || '') ? expectedFor(plansNow[Number(item.trip_number || index + 1) - 1], item.session).end : String(item.scheduled_end || '').trim(),
       actual_end: String(item.actual_end || '').trim(),
-      planned_km: Number(item.planned_km),
+      planned_km: hasKm(expectedFor(plansNow[Number(item.trip_number || index + 1) - 1], item.session).km) ? Number(expectedFor(plansNow[Number(item.trip_number || index + 1) - 1], item.session).km) : Number(item.planned_km),
       start_odometer_km: Number(item.start_odometer_km),
       end_odometer_km: Number(item.end_odometer_km),
       notes: String(item.notes || '').trim(),
@@ -438,6 +442,10 @@ export function createService(storage, { readBill = null, today = localToday, us
     const evening = 'expected_evening_start' in input || 'expected_evening_end' in input;
     const eStart = String(input.expected_evening_start ?? '').trim();
     const eEnd = String(input.expected_evening_end ?? '').trim();
+    const kmOf = (v, label) => { const t = String(v ?? '').trim(); if (t === '') return ''; const n = Number(t); if (!Number.isFinite(n) || n <= 0) throw new UserError(`${label} must be more than zero.`); return n; };
+    const kmGiven = 'planned_km' in input || 'planned_evening_km' in input;
+    const pKm = kmOf(input.planned_km, 'Morning planned km');
+    const pEveKm = kmOf(input.planned_evening_km, 'Evening planned km');
     for (const v of [start, end, eStart, eEnd]) if (v && !HHMM.test(v)) throw new UserError('Enter times as hours and minutes, like 07:40.');
     if (start && end && start >= end) throw new UserError('The drop-off time must be after the pick-up time.');
     if (eStart && eEnd && eStart >= eEnd) throw new UserError('The evening drop-off time must be after the evening pick-up time.');
@@ -446,11 +454,11 @@ export function createService(storage, { readBill = null, today = localToday, us
       const route = tx.read('Routes').find((r) => r.route_id === routeId);
       if (!route) throw new UserError('There is no such trip.', 404);
       const log = [];
-      for (const [field, v] of [['expected_start', start], ['expected_end', end], ...(evening ? [['expected_evening_start', eStart], ['expected_evening_end', eEnd]] : [])]) {
-        if (String(route[field] ?? '') !== v) log.push({ timestamp: now, user, action: 'Updated', tab: 'Routes', record_id: routeId, field, old_value: String(route[field] ?? ''), new_value: v });
+      for (const [field, v] of [['expected_start', start], ['expected_end', end], ...(evening ? [['expected_evening_start', eStart], ['expected_evening_end', eEnd]] : []), ...(kmGiven ? [['planned_km', pKm], ['planned_evening_km', pEveKm]] : [])]) {
+        if (String(route[field] ?? '') !== v) log.push({ timestamp: now, user, action: 'Updated', tab: 'Routes', record_id: routeId, field, old_value: String(route[field] ?? ''), new_value: String(v) });
       }
       if (!log.length) return { route_id: routeId, changed: 0 };
-      tx.update('Routes', (r) => r.route_id === routeId, { expected_start: start, expected_end: end, ...(evening ? { expected_evening_start: eStart, expected_evening_end: eEnd } : {}) });
+      tx.update('Routes', (r) => r.route_id === routeId, { expected_start: start, expected_end: end, ...(evening ? { expected_evening_start: eStart, expected_evening_end: eEnd } : {}), ...(kmGiven ? { planned_km: pKm, planned_evening_km: pEveKm } : {}) });
       tx.append('Change log', log);
       return { route_id: routeId, changed: log.length };
     });
@@ -468,6 +476,8 @@ export function createService(storage, { readBill = null, today = localToday, us
       next.start_odometer_km = num(input.start_odometer_km ?? trip.start_odometer_km, 'Start km');
       next.end_odometer_km = num(input.end_odometer_km ?? trip.end_odometer_km, 'End km');
       next.planned_km = num(input.planned_km ?? trip.planned_km, 'Planned km');
+      const planKm = expectedFor(tripPlans({ assignments: tx.read('Route assignments'), routes: tx.read('Routes') }, trip.bus_no)[Number(trip.trip_number) - 1], sessionOf(trip)).km;
+      if (hasKm(planKm)) next.planned_km = Number(planKm);
       if (next.end_odometer_km <= next.start_odometer_km) throw new UserError('End km must be more than start km.');
       if ('notes' in input) next.notes = String(input.notes ?? '').trim();
       const plan = tripPlans({ assignments: tx.read('Route assignments'), routes: tx.read('Routes') }, trip.bus_no)[Number(trip.trip_number) - 1];

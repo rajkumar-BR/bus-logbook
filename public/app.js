@@ -243,13 +243,13 @@ async function viewDaily(range = '') {
         ${Array.from({ length: Math.max(1, ...lists.buses.map((bus) => bus.trips)) }, (_, i) => i + 1).flatMap((number) => [['m', 'Morning'], ['e', 'Evening']].map(([k, session]) => { const id = `trip-${number}-${k}`; return `<fieldset class="trip-leg full" data-trip="${number}" data-session="${session}" style="display:none" disabled><legend>Trip ${number} · ${session}</legend><div class="trip-leg-grid">
           <div class="field"><label for="${id}-origin">From</label><input id="${id}-origin" placeholder="${session === 'Morning' ? 'First stop' : 'School'}" required></div>
           <div class="field"><label for="${id}-destination">To</label><input id="${id}-destination" placeholder="${session === 'Morning' ? 'School' : 'Last stop'}" required></div>
-          <div class="field"><label for="${id}-planned">Planned km</label><input id="${id}-planned" type="number" min="0.1" step="0.1" required></div>
+          <div class="field"><label for="${id}-planned">Planned km <span class="hint">(from Trip times)</span></label><input id="${id}-planned" type="number" min="0.1" step="0.1" required></div>
           <div class="field"><label for="${id}-start-odo">Start km</label><input id="${id}-start-odo" type="number" min="0" step="0.1" required></div>
           <div class="field"><label for="${id}-end-odo">End km</label><input id="${id}-end-odo" type="number" min="0" step="0.1" required></div>
           <div class="field"><label for="${id}-photo">Trip image <span class="hint">(optional)</span></label><input id="${id}-photo" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/heic"></div>
-          <div class="field"><label for="${id}-scheduled-start">Scheduled start</label><input id="${id}-scheduled-start" type="time" required></div>
+          <div class="field"><label for="${id}-scheduled-start">Scheduled start <span class="hint">(from Trip times)</span></label><input id="${id}-scheduled-start" type="time" required></div>
           <div class="field"><label for="${id}-actual-start">Actual start</label><input id="${id}-actual-start" type="time" required></div>
-          <div class="field"><label for="${id}-scheduled-end">Scheduled end</label><input id="${id}-scheduled-end" type="time" required></div>
+          <div class="field"><label for="${id}-scheduled-end">Scheduled end <span class="hint">(from Trip times)</span></label><input id="${id}-scheduled-end" type="time" required></div>
           <div class="field"><label for="${id}-actual-end">Actual end</label><input id="${id}-actual-end" type="time" required></div>
         </div></fieldset>`; })).join('')}
         <div class="btns full"><button class="btn" type="submit" id="trip-save">Save daily report</button></div>
@@ -276,7 +276,7 @@ async function viewDaily(range = '') {
       <div class="error full" id="te-error" hidden></div>
       <div class="field"><label for="te-start">Actual pick-up</label><input id="te-start" type="time" value="${esc(t.actual_start)}" required></div>
       <div class="field"><label for="te-end">Actual drop-off</label><input id="te-end" type="time" value="${esc(t.actual_end)}" required></div>
-      <div class="field"><label for="te-planned">Planned km</label><input id="te-planned" type="number" min="0" step="0.1" value="${esc(t.planned_km)}" required></div>
+      <div class="field"><label for="te-planned">Planned km</label><input id="te-planned" type="number" min="0" step="0.1" value="${esc(t.planned_km)}" ${t.planned_from_plan ? 'readonly title="Set under Edit bus → Trip times"' : ''} required></div>
       <div class="field"><label for="te-sodo">Start km</label><input id="te-sodo" type="number" min="0" step="0.1" value="${esc(t.start_odometer_km)}" required></div>
       <div class="field"><label for="te-eodo">End km</label><input id="te-eodo" type="number" min="0" step="0.1" value="${esc(t.end_odometer_km)}" required></div>
       <div class="btns full"><button class="btn" type="submit">Save trip</button> <button class="btn ghost" type="button" id="te-cancel">Cancel</button></div>
@@ -324,14 +324,15 @@ async function viewDaily(range = '') {
       const on = n <= count;
       el.disabled = !on;
       el.style.display = on ? '' : 'none';
-      // expected times come from the trip's setting (Edit bus → Trip times); only unset ones are typed here
+      // expected times and planned km are set once per bus (Edit bus → Trip times) and only read here
       const pre = el.dataset.session === 'Morning' ? 'expected_' : 'expected_evening_';
-      for (const [field, key] of [['scheduled-start', `${pre}start`], ['scheduled-end', `${pre}end`]]) {
+      const kmKey = el.dataset.session === 'Morning' ? 'planned_km' : 'planned_evening_km';
+      for (const [field, key] of [['scheduled-start', `${pre}start`], ['scheduled-end', `${pre}end`], ['planned', kmKey]]) {
         const input = $(`#trip-${n}-${k}-${field}`);
-        const set = on && plans[n - 1] && plans[n - 1][key];
-        input.readOnly = Boolean(set);
-        input.title = set ? 'Set under Edit bus → Trip times' : '';
-        if (set) input.value = plans[n - 1][key];
+        const set = on && plans[n - 1] ? plans[n - 1][key] : '';
+        input.readOnly = true;
+        input.title = 'Set under Edit bus → Trip times';
+        input.value = set === undefined || set === null ? '' : set;
       }
     });
   });
@@ -339,6 +340,12 @@ async function viewDaily(range = '') {
     event.preventDefault();
     const error = $('#trip-error');
     error.hidden = true;
+    const unset = shownTrips().filter(({ id }) => !$(`#${id}-planned`).value || !$(`#${id}-scheduled-start`).value || !$(`#${id}-scheduled-end`).value);
+    if (unset.length) {
+      error.textContent = `Set the expected times and planned km for ${unset.map((l) => `Trip ${l.number} ${l.session.toLowerCase()}`).join(', ')} under Edit bus → Trip times first.`;
+      error.hidden = false;
+      return;
+    }
     const report = {
       bus_no: $('#trip-bus').value,
       report_date: $('#trip-date').value,
@@ -1106,14 +1113,16 @@ async function viewEditBus(busNo) {
       </div>
     </form>
     <div class="panel" id="trip-times" style="margin-top:18px">
-      <div class="panel-h"><h2>Trip times</h2><span class="hint">Expected pick-up and drop-off for each trip, morning and evening. Changing them updates the expected times on every daily report, past days too</span></div>
+      <div class="panel-h"><h2>Trip times</h2><span class="hint">Expected pick-up and drop-off times and planned km for each trip, morning and evening. Changing them updates the expected times on every daily report, past days too</span></div>
       <div class="busform">
-        ${(b.trip_plans || []).map((p) => `<div class="field full" style="display:grid;grid-template-columns:minmax(140px,1.5fr) repeat(4,1fr) auto;gap:10px;align-items:end" data-route="${esc(p.route_id)}">
+        ${(b.trip_plans || []).map((p) => `<div class="field full" style="display:grid;grid-template-columns:minmax(140px,1.5fr) repeat(6,minmax(90px,1fr)) auto;gap:10px;align-items:end" data-route="${esc(p.route_id)}">
           <div><label>Trip ${p.trip_number}</label><div>${esc(p.route_name)}</div></div>
           <div><label>Morning pick-up</label><input type="time" class="tt-start" value="${esc(p.expected_start)}"></div>
           <div><label>Morning drop-off</label><input type="time" class="tt-end" value="${esc(p.expected_end)}"></div>
           <div><label>Evening pick-up</label><input type="time" class="tt-estart" value="${esc(p.expected_evening_start)}"></div>
           <div><label>Evening drop-off</label><input type="time" class="tt-eend" value="${esc(p.expected_evening_end)}"></div>
+          <div><label>Morning planned km</label><input type="number" min="0" step="0.1" class="tt-km" value="${esc(p.planned_km)}"></div>
+          <div><label>Evening planned km</label><input type="number" min="0" step="0.1" class="tt-ekm" value="${esc(p.planned_evening_km)}"></div>
           <button class="btn tt-save" type="button">Save</button>
         </div>`).join('') || '<span class="hint">This bus has no trips set up yet.</span>'}
         <div class="error full" id="tt-error" hidden></div>
@@ -1123,7 +1132,7 @@ async function viewEditBus(busNo) {
     const row = btn.closest('[data-route]');
     $('#tt-error').hidden = true;
     try {
-      const r = await putJSON(`/api/routes/${encodeURIComponent(row.dataset.route)}/times`, { expected_start: row.querySelector('.tt-start').value, expected_end: row.querySelector('.tt-end').value, expected_evening_start: row.querySelector('.tt-estart').value, expected_evening_end: row.querySelector('.tt-eend').value });
+      const r = await putJSON(`/api/routes/${encodeURIComponent(row.dataset.route)}/times`, { expected_start: row.querySelector('.tt-start').value, expected_end: row.querySelector('.tt-end').value, expected_evening_start: row.querySelector('.tt-estart').value, expected_evening_end: row.querySelector('.tt-eend').value, planned_km: row.querySelector('.tt-km').value, planned_evening_km: row.querySelector('.tt-ekm').value });
       listsCache = null;
       toast(r.changed ? 'Trip times saved.' : 'Nothing was changed.');
     } catch (err) {

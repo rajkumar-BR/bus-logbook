@@ -346,3 +346,20 @@ test('a trip has a morning and an evening leg with their own expected times', as
   assert.equal(row.status, 'On time');
   assert.equal(row.trips[1].timing_status, 'Lateness not checked');
 });
+
+test('planned km is set once per trip and applied to every day', async () => {
+  const storage = memoryStorage({
+    Buses: [{ bus_no: '01', active: true }],
+    Routes: [{ route_id: 'R01', route_name: 'Kurur', expected_start: '07:00', expected_end: '08:00' }],
+    'Route assignments': [{ bus_no: '01', route_id: 'R01', from_date: '2026-06-01' }],
+  });
+  const service = createService(storage, { today: () => '2026-10-23', user: 'test' });
+  await assert.rejects(service.setTripTimes('R01', { planned_km: '-5' }), /more than zero/);
+  await service.setTripTimes('R01', { expected_start: '07:00', expected_end: '08:00', planned_km: 20, planned_evening_km: 22 });
+  const leg = (session, s, e) => ({ trip_number: 1, session, origin: 'A', destination: 'B', planned_km: 5, start_odometer_km: s, end_odometer_km: e, scheduled_start: '07:00', scheduled_end: '08:00', actual_start: '07:00', actual_end: '08:00' });
+  await service.saveDailyReport({ report_date: '2026-10-23', bus_no: '01', driver_name: 'D', income_collected: 0, expenses: 0, trips: [leg('Morning', 100, 125), leg('Evening', 200, 222)] });
+  const km = async () => (await service.getDailyReport('2026-10-23', '2026-10-23')).buses[0].trips.map((t) => [t.planned_km, t.extra_km]);
+  assert.deepEqual(await km(), [[20, 5], [22, 0]]); // the typed 5 km is ignored
+  await service.setTripTimes('R01', { planned_km: 25, planned_evening_km: 22 });
+  assert.deepEqual(await km(), [[25, 0], [22, 0]]); // changing the setting changes every day
+});

@@ -19,6 +19,7 @@ export const TABS = {
   Routes: [
     ['school_id', 'text'], ['route_id', 'text'], ['route_name', 'text'], ['notes', 'text'],
     ['expected_start', 'text'], ['expected_end', 'text'], ['expected_evening_start', 'text'], ['expected_evening_end', 'text'],
+    ['planned_km', 'number'], ['planned_evening_km', 'number'],
   ],
   'Route assignments': [
     ['school_id', 'text'], ['bus_no', 'text'], ['route_id', 'text'], ['from_date', 'date'], ['to_date', 'date'],
