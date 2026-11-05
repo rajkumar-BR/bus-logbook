@@ -5,7 +5,7 @@ import { createService } from '../src/service.js';
 function memoryStorage(initial = {}) {
   const tables = Object.fromEntries([
     'Buses', 'Routes', 'Route assignments', 'Daily reports', 'Trips', 'Entries', 'Parts changed',
-    'Workshops', 'Lists', 'Settings', 'Bus documents', 'Change log',
+    'Workshops', 'Lists', 'Settings', 'Bus documents', 'Change log', 'Tyres', 'Tyre fitments', 'Tyre retreads',
   ].map((tab) => [tab, initial[tab] || []]));
   return {
     tables,
@@ -260,4 +260,54 @@ test('daily report can be filtered by status, late trips and extra km', async ()
   assert.deepEqual(await nos({ extra: 'over' }), ['02']);
   assert.deepEqual(await nos({ status: 'Late', extra: 'within' }), []);
   assert.equal((await service.getDailyReport('2026-10-22', '2026-10-22', '', { late: 'with' })).summary.total_bus_days, 1);
+});
+
+test('tyres stay on their bus; retreads come back to stock and can go to any bus', async () => {
+  const trip = (id, bus, date, n, km) => ({ trip_id: id, report_id: `D-${bus}-${date}`, trip_date: date, bus_no: bus, trip_number: n, actual_km: km, extra_km: 0, on_time: true, scheduled_start: '08:00', actual_start: '08:00', scheduled_end: '09:00', actual_end: '09:00', planned_km: km, start_odometer_km: 0, end_odometer_km: km });
+  const storage = memoryStorage({
+    Buses: [{ bus_no: '01', active: true }, { bus_no: '02', active: true }],
+    Routes: [{ route_id: 'R01', route_name: 'Kurur' }, { route_id: 'R02', route_name: 'Perahambi' }],
+    'Route assignments': [{ bus_no: '01', route_id: 'R01', from_date: '2026-06-01' }, { bus_no: '02', route_id: 'R02', from_date: '2026-06-01' }],
+    Trips: [trip('a', '01', '2026-10-05', 1, 30), trip('b', '01', '2026-10-12', 1, 30), trip('c', '02', '2026-10-20', 1, 20), trip('d', '01', '2026-10-21', 1, 15)],
+    Tyres: [{ tyre_no: 'A', status: 'In stock' }, { tyre_no: 'B', status: 'In stock' }, { tyre_no: 'C', status: 'In stock' }],
+    'Tyre fitments': [
+      { fitment_id: 'F1', tyre_no: 'A', bus_no: '02', position: 'Back right outer', fitted_date: '2026-10-01', fitted_km: 1000 },
+      { fitment_id: 'F2', tyre_no: 'B', bus_no: '01', position: 'Back left outer', fitted_date: '2026-10-01', fitted_km: 5000 },
+    ],
+  });
+  const service = createService(storage, { today: () => '2026-10-23', user: 'test' });
+  const move = (date, odometers, moves) => service.moveTyres({ date, odometers, moves });
+  // a tyre on a bus cannot be lent to another bus, or put in stock
+  await assert.rejects(move('2026-10-13', { '01': 5100, '02': 1200 }, [{ tyre_no: 'B', to: 'bus', bus_no: '02', position: 'Front left' }]), /belongs to Bus 01/);
+  await assert.rejects(move('2026-10-13', { '01': 5100 }, [{ tyre_no: 'B', to: 'In stock' }]), /belongs to Bus 01/);
+  // a new tyre cannot take a place that is still occupied
+  await assert.rejects(move('2026-10-13', { '01': 5100 }, [{ tyre_no: 'C', to: 'bus', bus_no: '01', position: 'Back left outer' }]), /already has tyre B/);
+  await assert.rejects(move('2026-10-13', { '01': 4000 }, [{ tyre_no: 'B', to: 'At retreader' }]), /cannot be less than 5,000/);
+  // B goes to the retreader and stock tyre C replaces it on bus 1
+  await move('2026-10-13', { '01': 5100 }, [{ tyre_no: 'B', to: 'At retreader' }, { tyre_no: 'C', to: 'bus', bus_no: '01', position: 'Back left outer' }]);
+  await assert.rejects(move('2026-10-14', { '02': 1300 }, [{ tyre_no: 'B', to: 'bus', bus_no: '02', position: 'Front left' }]), /at the retreader/);
+  await assert.rejects(service.returnRetread({ tyre_no: 'A', date: '2026-10-18' }), /not at the retreader/);
+  await assert.rejects(service.returnRetread({ tyre_no: 'B', date: '2026-10-12' }), /cannot be earlier/);
+  const back = await service.returnRetread({ tyre_no: 'B', date: '2026-10-18', company: 'Green Retreads', cost: 4500 });
+  assert.deepEqual(back, { tyre_no: 'B', bus_no: '01', expense_saved: true });
+  // the cost is an expense of bus 1 on the return date
+  const rep = await service.getDailyReport('2026-10-18', '2026-10-18', '01');
+  assert.equal(rep.summary.expenses, 4500);
+  // the retreaded tyre B now goes on bus 2, the other bus
+  await move('2026-10-19', { '02': 1500 }, [{ tyre_no: 'B', to: 'bus', bus_no: '02', position: 'Front left' }]);
+  // tyre A, on bus 2, is sent for a puncture repair and must come back to bus 2
+  await move('2026-10-20', { '02': 1600 }, [{ tyre_no: 'A', to: 'In repair' }]);
+  await assert.rejects(move('2026-10-21', { '01': 5200 }, [{ tyre_no: 'A', to: 'bus', bus_no: '01', position: 'Front left' }]), /must go back to that bus/);
+  const { tyres } = await service.getTyres();
+  const by = Object.fromEntries(tyres.map((x) => [x.tyre_no, x]));
+  assert.equal(by.B.status, 'Fitted');
+  assert.equal(by.B.bus_no, '02');
+  assert.equal(by.B.condition, 'Retreaded');
+  assert.equal(by.B.retread_count, 1);
+  assert.deepEqual(by.B.retreads, [{ returned_date: '2026-10-18', company: 'Green Retreads', cost: 4500, bus_no: '01' }]);
+  assert.deepEqual(by.B.lives.map((l) => [l.label, l.km]), [['Original', 100], ['Retread 1', 20]]); // 100 km by odometer on bus 1, then 20 logged km on bus 2
+  assert.deepEqual(by.B.by_route, [{ route: 'Kurur', km: 60 }, { route: 'Perahambi', km: 20 }]);
+  assert.equal(by.A.status, 'In repair');
+  assert.equal(by.C.bus_no, '01');
+  assert.equal(by.C.total_km, 15);
 });

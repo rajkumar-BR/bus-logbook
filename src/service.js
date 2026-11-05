@@ -469,6 +469,206 @@ export function createService(storage, { readBill = null, today = localToday, us
     });
   }
 
+
+  // ---------- tyres: each tyre is tracked on its own, with where it has been fitted and for how long
+
+  // Spares are not per bus: unfitted tyres sit in the common "In stock" pool.
+  // A tyre stays on its bus (it may change wheel position there) until it goes to repair, the retreader or scrap.
+  // A retreaded tyre keeps its serial number and may be fitted to any bus when it comes back.
+  const TYRE_POSITIONS = ['Front left', 'Front right', 'Back left outer', 'Back left inner', 'Back right outer', 'Back right inner'];
+  const TYRE_PLACES = ['In stock', 'In repair', 'At retreader', 'Scrapped'];
+  const routeOfTrip = (d, trip) => {
+    const on = d.assignments.filter((a) => a.bus_no === trip.bus_no && a.from_date && a.from_date <= trip.trip_date && (!a.to_date || a.to_date >= trip.trip_date));
+    const a = on[Number(trip.trip_number) - 1] || on[0];
+    return a ? routeName(d, a.route_id) : 'No route set';
+  };
+
+  async function getTyres() {
+    const d = await load();
+    const [tyres, fitments, retreads] = await Promise.all([storage.read('Tyres'), storage.read('Tyre fitments'), storage.read('Tyre retreads')]);
+    const t = today();
+    const kmByRoute = (f) => {
+      const out = new Map();
+      for (const trip of d.trips) {
+        if (trip.bus_no !== f.bus_no || !f.fitted_date || trip.trip_date < f.fitted_date || trip.trip_date > (f.removed_date || t)) continue;
+        const r = routeOfTrip(d, trip);
+        out.set(r, (out.get(r) || 0) + (Number(trip.actual_km) || 0));
+      }
+      return out;
+    };
+    const rows = tyres.filter((x) => x.tyre_no).map((tyre) => {
+      const spells = fitments.filter((f) => f.tyre_no === tyre.tyre_no).sort((a, b) => String(a.fitted_date).localeCompare(String(b.fitted_date)) || String(a.fitment_id).localeCompare(String(b.fitment_id)))
+        .map((f) => {
+          const routes = kmByRoute(f);
+          const open = !f.removed_date;
+          const odoKm = !open && Number.isFinite(Number(f.removed_km)) && f.removed_km !== '' && f.removed_km !== null ? Number(f.removed_km) - Number(f.fitted_km) : null;
+          const logged = [...routes.values()].reduce((a, b) => a + b, 0);
+          return {
+            fitment_id: f.fitment_id, bus_no: f.bus_no, position: f.position, fitted_date: f.fitted_date, fitted_km: f.fitted_km,
+            removed_date: f.removed_date || '', removed_km: f.removed_km ?? '', removed_to: f.removed_to || '',
+            km: odoKm ?? logged, km_from: odoKm !== null ? 'odometer' : 'logged trips', logged_km: logged,
+            by_route: [...routes].map(([route, km]) => ({ route, km })).sort((a, b) => b.km - a.km),
+          };
+        });
+      const open = spells.find((x) => !x.removed_date);
+      const mine = retreads.filter((r) => r.tyre_no === tyre.tyre_no).sort((a, b) => String(a.returned_date).localeCompare(String(b.returned_date)));
+      // a spell belongs to life n when n retreads had come back before it was fitted (life 0 = original)
+      for (const sp of spells) sp.life = mine.filter((r) => r.returned_date <= sp.fitted_date).length;
+      const lives = [];
+      for (let n = 0; n <= mine.length; n++) {
+        const inLife = spells.filter((x) => x.life === n);
+        lives.push({ life: n, label: n === 0 ? 'Original' : `Retread ${n}`, km: (n === 0 ? Number(tyre.km_before) || 0 : 0) + inLife.reduce((a, x) => a + x.km, 0) });
+      }
+      const byRoute = new Map();
+      for (const sp of spells) for (const r of sp.by_route) byRoute.set(r.route, (byRoute.get(r.route) || 0) + r.km);
+      const before = Number(tyre.km_before) || 0;
+      return {
+        tyre_no: tyre.tyre_no, make: tyre.make || '', condition: tyre.condition || '', notes: tyre.notes || '',
+        km_before: before,
+        status: open ? 'Fitted' : (tyre.status || 'In stock'),
+        retread_count: mine.length, lives,
+        retreads: mine.map((r) => ({ returned_date: r.returned_date, company: r.company || '', cost: Number(r.cost) || 0, bus_no: r.bus_no || '' })),
+        bus_no: open ? open.bus_no : '', position: open ? open.position : '',
+        total_km: before + spells.reduce((a, x) => a + x.km, 0),
+        by_route: [...byRoute].map(([route, km]) => ({ route, km })).sort((a, b) => b.km - a.km),
+        spells,
+      };
+    }).sort((a, b) => a.tyre_no.localeCompare(b.tyre_no));
+    return { today: t, positions: TYRE_POSITIONS, places: TYRE_PLACES, buses: activeBuses(d).map((b) => b.bus_no), tyres: rows };
+  }
+
+  // A tyre sent to the retreader (status 'At retreader') comes back with the same serial number, into the common stock.
+  // The cost is booked as an expense of the bus it last ran on.
+  async function returnRetread(input) {
+    const tyre_no = String(input.tyre_no || '').trim();
+    const date = String(input.date || '').trim();
+    const company = String(input.company || '').trim();
+    const cost = input.cost === '' || input.cost == null ? 0 : Number(input.cost);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00`)) || date > today()) throw new UserError('Choose a valid date that is not in the future.');
+    if (!Number.isFinite(cost) || cost < 0) throw new UserError('Enter the retread cost in rupees.');
+    const now = localNow();
+    const result = await storage.transact((tx) => {
+      const tyre = tx.read('Tyres').find((x) => x.tyre_no.toLowerCase() === tyre_no.toLowerCase());
+      if (!tyre) throw new UserError(`Tyre ${tyre_no} is not in the tyre list.`);
+      if (tyre.status !== 'At retreader') throw new UserError(`Tyre ${tyre.tyre_no} is not at the retreader.`);
+      const f = tx.read('Tyre fitments').filter((x) => x.tyre_no === tyre.tyre_no).sort((a, b) => String(a.fitted_date).localeCompare(String(b.fitted_date)) || String(a.fitment_id).localeCompare(String(b.fitment_id))).pop();
+      if (f && f.removed_date && date < f.removed_date) throw new UserError(`The tyre went to the retreader on ${f.removed_date}. The return date cannot be earlier.`);
+      const bus_no = f ? f.bus_no : '';
+      const n = tx.read('Tyre retreads').length + 1;
+      tx.append('Tyre retreads', [{ retread_id: `RT-${String(n).padStart(4, '0')}-${tyre.tyre_no}`, tyre_no: tyre.tyre_no, returned_date: date, company, cost, bus_no, notes: '' }]);
+      tx.update('Tyres', (x) => x.tyre_no === tyre.tyre_no, { status: 'In stock', condition: 'Retreaded' });
+      tx.append('Change log', [{ timestamp: now, user, action: 'Retreaded', tab: 'Tyres', record_id: tyre.tyre_no, field: 'status', old_value: 'At retreader', new_value: `In stock${company ? `, ${company}` : ''}${cost ? `, Rs ${cost}` : ''}` }]);
+      return { tyre_no: tyre.tyre_no, bus_no };
+    });
+    let expense_saved = false;
+    if (cost > 0 && result.bus_no) {
+      await saveExpense({ bus_no: result.bus_no, report_date: date, amount: cost, note: `Retread of tyre ${result.tyre_no}${company ? ` (${company})` : ''}` });
+      expense_saved = true;
+    }
+    return { ...result, expense_saved };
+  }
+
+  async function addTyres(input) {
+    const list = (Array.isArray(input.tyre_nos) ? input.tyre_nos : String(input.tyre_nos || '').split(/[\n,;]+/)).map((x) => String(x).trim()).filter(Boolean);
+    if (!list.length) throw new UserError('Enter at least one tyre number.');
+    const condition = ['New', 'Retreaded', 'Unknown'].includes(input.condition) ? input.condition : 'Unknown';
+    const kmBefore = input.km_before === '' || input.km_before == null ? '' : Number(input.km_before);
+    if (kmBefore !== '' && (!Number.isFinite(kmBefore) || kmBefore < 0)) throw new UserError('Km already run must be zero or more.');
+    const make = String(input.make || '').trim();
+    const now = localNow();
+    return storage.transact((tx) => {
+      const have = new Set(tx.read('Tyres').map((x) => x.tyre_no.toLowerCase()));
+      const dupes = list.filter((x, i) => have.has(x.toLowerCase()) || list.findIndex((y) => y.toLowerCase() === x.toLowerCase()) !== i);
+      if (dupes.length) throw new UserError(`Already in the tyre list: ${[...new Set(dupes)].join(', ')}.`);
+      tx.append('Tyres', list.map((tyre_no) => ({ tyre_no, make, condition, km_before: kmBefore, status: 'In stock', notes: '' })));
+      tx.append('Change log', list.map((tyre_no) => ({ timestamp: now, user, action: 'Added', tab: 'Tyres', record_id: tyre_no, field: '', old_value: '', new_value: `${condition}${make ? `, ${make}` : ''}` })));
+      return { added: list.length };
+    });
+  }
+
+  // One or more tyres change place on a date: fitted to a bus position, or sent to repair / scrap / stock.
+  // A swap between two buses is one call with two moves. odometers = { busNo: km } for every bus involved.
+  async function moveTyres(input) {
+    const date = String(input.date || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00`)) || date > today()) throw new UserError('Choose a valid date that is not in the future.');
+    const moves = (Array.isArray(input.moves) ? input.moves : []).map((m) => ({
+      tyre_no: String(m.tyre_no || '').trim(), to: String(m.to || '').trim(), bus_no: String(m.bus_no || '').trim(), position: String(m.position || '').trim(),
+    })).filter((m) => m.tyre_no);
+    if (!moves.length) throw new UserError('Add at least one tyre to move.');
+    const odo = {};
+    for (const [bus, km] of Object.entries(input.odometers || {})) if (String(km).trim() !== '') odo[bus] = Number(km);
+    const now = localNow();
+    const buses = new Set((await load()).buses.filter((b) => b.active !== false).map((b) => b.bus_no));
+    return storage.transact((tx) => {
+      const tyres = tx.read('Tyres');
+      const fitments = tx.read('Tyre fitments');
+      const open = fitments.filter((f) => !f.removed_date);
+      const seen = new Set();
+      const targets = new Set();
+      for (const m of moves) {
+        if (seen.has(m.tyre_no.toLowerCase())) throw new UserError(`Tyre ${m.tyre_no} is listed twice.`);
+        seen.add(m.tyre_no.toLowerCase());
+        const tyre = tyres.find((x) => x.tyre_no.toLowerCase() === m.tyre_no.toLowerCase());
+        if (!tyre) throw new UserError(`Tyre ${m.tyre_no} is not in the tyre list. Add it first.`);
+        m.tyre_no = tyre.tyre_no;
+        const cur = open.find((x) => x.tyre_no === m.tyre_no);
+        const lastBus = fitments.filter((f) => f.tyre_no === m.tyre_no).sort((a, b) => String(a.fitted_date).localeCompare(String(b.fitted_date)) || String(a.fitment_id).localeCompare(String(b.fitment_id))).pop()?.bus_no || '';
+        if (tyre.status === 'Scrapped') throw new UserError(`Tyre ${m.tyre_no} is scrapped.`);
+        if (tyre.status === 'At retreader' && !cur) throw new UserError(`Tyre ${m.tyre_no} is at the retreader. Record its return first.`);
+        if (m.to === 'bus') {
+          if (cur && cur.bus_no !== m.bus_no) throw new UserError(`Tyre ${m.tyre_no} belongs to Bus ${cur.bus_no} and cannot go to another bus. Send it to repair, the retreader or scrap.`);
+          if (!cur && tyre.status === 'In repair' && lastBus && lastBus !== m.bus_no) throw new UserError(`Tyre ${m.tyre_no} was taken off Bus ${lastBus} for repair and must go back to that bus.`);
+          if (!buses.has(m.bus_no)) throw new UserError(`Choose an active bus for tyre ${m.tyre_no}.`);
+          if (!TYRE_POSITIONS.includes(m.position)) throw new UserError(`Choose the wheel position for tyre ${m.tyre_no}.`);
+          const slot = `${m.bus_no}|${m.position}`;
+          if (targets.has(slot)) throw new UserError(`Bus ${m.bus_no} ${m.position.toLowerCase()} is given to two tyres.`);
+          targets.add(slot);
+        } else if (!TYRE_PLACES.includes(m.to)) throw new UserError(`Choose where tyre ${m.tyre_no} goes.`);
+        else if (m.to === 'In stock' && (cur || (tyre.status === 'In repair' && lastBus))) throw new UserError(`Tyre ${m.tyre_no} belongs to Bus ${cur ? cur.bus_no : lastBus}. Fit it back on that bus, or send it to the retreader or scrap.`);
+      }
+      // tyres taken off: the ones being moved; a tyre sitting where a moved tyre is going must be moved too
+      const closing = new Map(); // fitment_id -> removed_to
+      for (const m of moves) {
+        const f = open.find((x) => x.tyre_no === m.tyre_no);
+        if (f) closing.set(f.fitment_id, m.to === 'bus' ? 'Position changed' : m.to);
+      }
+      for (const slot of targets) {
+        const [bus, pos] = slot.split('|');
+        const f = open.find((x) => x.bus_no === bus && x.position === pos);
+        if (f && !closing.has(f.fitment_id)) throw new UserError(`Bus ${bus} ${pos.toLowerCase()} already has tyre ${f.tyre_no}. Move that tyre first.`);
+      }
+      const involved = new Set([...closing.keys()].map((id) => open.find((f) => f.fitment_id === id).bus_no));
+      for (const m of moves) if (m.to === 'bus') involved.add(m.bus_no);
+      const lastKm = (bus) => Math.max(0, ...fitments.filter((f) => f.bus_no === bus).flatMap((f) => [Number(f.fitted_km) || 0, Number(f.removed_km) || 0]));
+      for (const bus of involved) {
+        if (!Number.isFinite(odo[bus]) || odo[bus] < 0) throw new UserError(`Enter Bus ${bus}'s odometer reading for this change.`);
+        if (odo[bus] < lastKm(bus)) throw new UserError(`Bus ${bus}'s odometer cannot be less than ${lastKm(bus).toLocaleString('en-IN')}, the last reading recorded for it.`);
+      }
+      const log = [];
+      for (const [id, to] of closing) {
+        const f = open.find((x) => x.fitment_id === id);
+        tx.update('Tyre fitments', (x) => x.fitment_id === id, { removed_date: date, removed_km: odo[f.bus_no], removed_to: to });
+        if (to !== 'Position changed') tx.update('Tyres', (x) => x.tyre_no === f.tyre_no, { status: to });
+        log.push({ timestamp: now, user, action: 'Removed', tab: 'Tyres', record_id: f.tyre_no, field: 'fitted', old_value: `Bus ${f.bus_no} ${f.position}`, new_value: to });
+      }
+      let n = fitments.length;
+      const fresh = [];
+      for (const m of moves) {
+        if (m.to === 'bus') {
+          n += 1;
+          fresh.push({ fitment_id: `F-${String(n).padStart(4, '0')}-${m.tyre_no}`, tyre_no: m.tyre_no, bus_no: m.bus_no, position: m.position, fitted_date: date, fitted_km: odo[m.bus_no], removed_date: '', removed_km: '', removed_to: '' });
+          log.push({ timestamp: now, user, action: 'Fitted', tab: 'Tyres', record_id: m.tyre_no, field: 'fitted', old_value: '', new_value: `Bus ${m.bus_no} ${m.position}` });
+        } else if (!closing.size || !open.some((x) => x.tyre_no === m.tyre_no)) {
+          tx.update('Tyres', (x) => x.tyre_no === m.tyre_no, { status: m.to });
+          log.push({ timestamp: now, user, action: 'Moved', tab: 'Tyres', record_id: m.tyre_no, field: 'status', old_value: '', new_value: m.to });
+        }
+      }
+      if (fresh.length) tx.append('Tyre fitments', fresh);
+      tx.append('Change log', log);
+      return { moved: moves.length, taken_off_unlisted: [...closing].filter(([id]) => !moves.some((m) => open.find((x) => x.fitment_id === id)?.tyre_no === m.tyre_no)).length };
+    });
+  }
+
   async function checkRepeat({ bus_no, system, date_in, kind, exclude_entry_id }) {
     if (![KINDS.REPAIR, KINDS.BREAKDOWN].includes(kind)) return { isRepeat: false, count: 0 };
     const d = await load();
@@ -834,5 +1034,5 @@ export function createService(storage, { readBill = null, today = localToday, us
     return I.buildTemplate({ kinds: lists.entry_kinds, systems: lists.systems });
   }
 
-  return { getLists, getFleet, getBus, getEntry, getRepeats, getDailyReport, saveDailyReport, saveExpense, setTripTimes, updateTrip, checkRepeat, readBillFields, saveEntry, voidEntry, addBus, updateBus, listBuses, getChangeLog, importWorkbook, importTemplate };
+  return { getLists, getFleet, getBus, getEntry, getRepeats, getDailyReport, saveDailyReport, saveExpense, setTripTimes, updateTrip, getTyres, addTyres, moveTyres, returnRetread, checkRepeat, readBillFields, saveEntry, voidEntry, addBus, updateBus, listBuses, getChangeLog, importWorkbook, importTemplate };
 }

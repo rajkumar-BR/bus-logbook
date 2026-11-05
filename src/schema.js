@@ -52,6 +52,18 @@ export const TABS = {
     ['position', 'text'], ['removed_part_no', 'text'], ['fitted_part_no', 'text'],
     ['part_cost', 'number'], ['warranty_until', 'date'], ['record_status', 'text'],
   ],
+  Tyres: [
+    ['school_id', 'text'], ['tyre_no', 'text'], ['make', 'text'], ['condition', 'text'],
+    ['km_before', 'number'], ['status', 'text'], ['notes', 'text'],
+  ],
+  'Tyre fitments': [
+    ['school_id', 'text'], ['fitment_id', 'text'], ['tyre_no', 'text'], ['bus_no', 'text'], ['position', 'text'],
+    ['fitted_date', 'date'], ['fitted_km', 'number'], ['removed_date', 'date'], ['removed_km', 'number'], ['removed_to', 'text'],
+  ],
+  'Tyre retreads': [
+    ['school_id', 'text'], ['retread_id', 'text'], ['tyre_no', 'text'], ['returned_date', 'date'], ['company', 'text'],
+    ['cost', 'number'], ['bus_no', 'text'], ['notes', 'text'],
+  ],
   'Bus documents': [
     ['school_id', 'text'], ['bus_no', 'text'], ['doc_type', 'text'], ['doc_number', 'text'],
     ['valid_until', 'date'], ['file_link', 'text'],

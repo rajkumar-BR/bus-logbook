@@ -63,8 +63,8 @@ async function getLists(force = false) {
 
 // ---------- router
 
-const views = { fleet: viewFleet, daily: viewDaily, bus: viewBus, repeats: viewRepeats, new: viewNew, correct: viewCorrect, buses: viewBuses, import: viewImport, editbus: viewEditBus, changelog: viewChangeLog };
-const NAV_FOR = { fleet: '#fleet', daily: '#daily', bus: '#fleet', repeats: '#repeats', new: '#new', correct: '#new', buses: '#buses', import: '#import', editbus: '#fleet', changelog: '#changelog' };
+const views = { fleet: viewFleet, daily: viewDaily, bus: viewBus, repeats: viewRepeats, new: viewNew, correct: viewCorrect, buses: viewBuses, import: viewImport, editbus: viewEditBus, changelog: viewChangeLog, tyres: viewTyres };
+const NAV_FOR = { fleet: '#fleet', daily: '#daily', bus: '#fleet', repeats: '#repeats', new: '#new', correct: '#new', buses: '#buses', import: '#import', editbus: '#fleet', changelog: '#changelog', tyres: '#tyres' };
 
 async function router() {
   const [name, arg] = location.hash.slice(1).split('/');
@@ -859,6 +859,124 @@ async function viewBuses() {
       $('#bus-error').textContent = err.message;
       $('#bus-error').hidden = false;
     }
+  });
+}
+
+
+// ---------- Tyres
+
+async function viewTyres() {
+  const data = await api('/api/tyres');
+  const km = (n) => `${Math.round(Number(n) || 0).toLocaleString('en-IN')} km`;
+  const where = (t) => (t.status === 'Fitted' ? `Bus ${esc(t.bus_no)} · ${esc(t.position)}` : esc(t.status));
+  const routesText = (list) => list.length ? list.map((r) => `${esc(r.route)} ${km(r.km)}`).join(' · ') : '—';
+  const busOptions = data.buses.map((b) => `<option value="${esc(b)}">Bus ${esc(b)}</option>`).join('');
+  main.innerHTML = `
+    <div class="topbar"><div><h1>Tyres</h1><p class="sub">A tyre stays on its bus until it goes to repair, the retreader or scrap. Unfitted tyres are common stock, and a retreaded tyre can go on any bus</p></div></div>
+    <div class="panel" style="margin-bottom:18px">
+      <div class="panel-h"><h2>All tyres</h2><span class="hint">Km on routes counts the logged daily trips of the bus the tyre was fitted to. Total km uses the odometer readings given at each change</span></div>
+      <div class="tbl-wrap"><table><thead><tr><th>Tyre no.</th><th>Make / condition</th><th>Where now</th><th>Total km</th><th>Km by route</th><th></th></tr></thead><tbody>
+      ${data.tyres.map((t, i) => `<tr><td class="mono">${esc(t.tyre_no)}</td><td>${esc([t.make, t.condition].filter(Boolean).join(' · ') || '—')}${t.retread_count ? `<div class="hint">Retreaded ${t.retread_count} time${t.retread_count === 1 ? '' : 's'}</div>` : ''}</td><td>${where(t)}</td><td class="mono">${km(t.total_km)}${t.km_before ? `<div class="hint">incl. ${km(t.km_before)} before it was added</div>` : ''}${t.lives.length > 1 ? `<div class="hint">${t.lives.map((l) => `${esc(l.label)} ${km(l.km)}`).join(' · ')}</div>` : ''}</td><td>${routesText(t.by_route)}</td><td><button class="btn ghost tyre-hist" type="button" data-i="${i}">History</button></td></tr>
+        <tr class="tyre-hist-row" id="hist-${i}" hidden><td colspan="6">${t.spells.length ? `<table><thead><tr><th>Bus / position</th><th>Fitted</th><th>Removed</th><th>Km</th><th>Km by route</th></tr></thead><tbody>${t.spells.map((s) => `<tr><td>Bus ${esc(s.bus_no)} · ${esc(s.position)}</td><td>${fullDate(s.fitted_date)}<div class="hint">odometer ${Number(s.fitted_km).toLocaleString('en-IN')}</div></td><td>${s.removed_date ? `${fullDate(s.removed_date)}<div class="hint">odometer ${Number(s.removed_km).toLocaleString('en-IN')} · ${esc(s.removed_to)}</div>` : 'Still fitted'}</td><td class="mono">${km(s.km)}<div class="hint">${esc(s.km_from)}</div></td><td>${routesText(s.by_route)}</td></tr>`).join('')}</tbody></table>` : '<span class="hint">Never fitted yet.</span>'}</td></tr>`).join('') || '<tr><td colspan="6" class="hint">No tyres yet. Add them below.</td></tr>'}
+      </tbody></table></div>
+    </div>
+    <form class="panel" id="move-form" style="margin-bottom:18px" novalidate>
+      <div class="panel-h"><h2>Move or swap tyres</h2><span class="hint">List every tyre that changes place. Example: tyre A goes to the retreader, stock tyre C is fitted on that bus in its place</span></div>
+      <div class="busform">
+        <div class="error" id="mv-error" style="grid-column:1/-1" hidden></div>
+        <div class="field"><label for="mv-date">Date of the change</label><input id="mv-date" type="date" max="${esc(data.today)}" value="${esc(data.today)}" required></div>
+        <div id="mv-lines" class="full" style="grid-column:1/-1;display:grid;gap:10px"></div>
+        <div class="btns" style="grid-column:1/-1"><button class="btn ghost" type="button" id="mv-add">Add another tyre</button></div>
+        <div id="mv-odo" style="grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px"></div>
+        <div class="btns" style="grid-column:1/-1"><button class="btn" type="submit">Save the change</button></div>
+      </div>
+    </form>
+    <form class="panel" id="retread-form" style="margin-bottom:18px" novalidate>
+      <div class="panel-h"><h2>Retread came back</h2><span class="hint">The tyre keeps its number and goes to stock. Fit it on any bus with "Move or swap tyres". The cost is added to the expenses of the bus it came off</span></div>
+      <div class="busform">
+        <div class="error" id="rt-error" style="grid-column:1/-1" hidden></div>
+        <div class="field"><label for="rt-tyre">Tyre</label><select id="rt-tyre" required><option value="">Choose…</option>${data.tyres.filter((t) => t.status === 'At retreader').map((t) => `<option>${esc(t.tyre_no)}</option>`).join('')}</select></div>
+        <div class="field"><label for="rt-date">Date it came back</label><input id="rt-date" type="date" max="${esc(data.today)}" value="${esc(data.today)}" required></div>
+        <div class="field"><label for="rt-co">Retread company</label><input id="rt-co"></div>
+        <div class="field"><label for="rt-cost">Cost (₹)</label><input id="rt-cost" inputmode="decimal"></div>
+        <div class="btns" style="grid-column:1/-1"><button class="btn" type="submit">Save</button></div>
+      </div>
+    </form>
+    <form class="panel" id="add-tyres" novalidate>
+      <div class="panel-h"><h2>Add tyres</h2><span class="hint">One tyre number per line. Then use "Move or swap tyres" to fit them on a bus</span></div>
+      <div class="busform">
+        <div class="error" id="at-error" style="grid-column:1/-1" hidden></div>
+        <div class="field" style="grid-column:1/-1"><label for="at-nos">Tyre numbers</label><textarea id="at-nos" rows="4" placeholder="30294492023&#10;30159451923"></textarea></div>
+        <div class="field"><label for="at-make">Make</label><input id="at-make" placeholder="e.g. MRF, Apollo"></div>
+        <div class="field"><label for="at-cond">Condition</label><select id="at-cond"><option>New</option><option>Retreaded</option><option selected>Unknown</option></select></div>
+        <div class="field"><label for="at-km">Km already run (if known)</label><input id="at-km" inputmode="numeric" placeholder="0"></div>
+        <div class="btns" style="grid-column:1/-1"><button class="btn" type="submit">Add tyres</button></div>
+      </div>
+    </form>`;
+  document.querySelectorAll('.tyre-hist').forEach((b) => b.addEventListener('click', () => { const r = $(`#hist-${b.dataset.i}`); r.hidden = !r.hidden; }));
+
+  const lines = [{ tyre_no: '', to: '', bus_no: '', position: '' }, { tyre_no: '', to: '', bus_no: '', position: '' }];
+  const odo = {};
+  const tyreOf = (no) => data.tyres.find((t) => t.tyre_no.toLowerCase() === String(no).trim().toLowerCase());
+  const involved = () => {
+    const set = new Set();
+    for (const l of lines) {
+      const t = tyreOf(l.tyre_no);
+      if (t && t.bus_no) set.add(t.bus_no);
+      if (l.to === 'bus' && l.bus_no) set.add(l.bus_no);
+    }
+    return [...set].sort();
+  };
+  const drawOdo = () => {
+    $('#mv-odo').innerHTML = involved().map((b) => `<div class="field"><label for="odo-${esc(b)}">Bus ${esc(b)} odometer now (km)</label><input id="odo-${esc(b)}" data-bus="${esc(b)}" inputmode="decimal" value="${esc(odo[b] ?? '')}" required></div>`).join('');
+    document.querySelectorAll('#mv-odo input').forEach((i) => i.addEventListener('input', () => { odo[i.dataset.bus] = i.value; }));
+  };
+  const drawLines = () => {
+    $('#mv-lines').innerHTML = lines.map((l, i) => `<div style="display:grid;grid-template-columns:minmax(140px,1.4fr) minmax(130px,1fr) minmax(110px,1fr) minmax(140px,1fr) auto;gap:10px;align-items:end">
+      <div class="field"><label>Tyre no.</label><input list="tyre-list" data-i="${i}" data-k="tyre_no" value="${esc(l.tyre_no)}" autocomplete="off"></div>
+      <div class="field"><label>Goes to</label><select data-i="${i}" data-k="to"><option value="">Choose…</option><option value="bus" ${l.to === 'bus' ? 'selected' : ''}>Fit on a bus</option>${data.places.map((p) => `<option ${l.to === p ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></div>
+      <div class="field"><label>Bus</label><select data-i="${i}" data-k="bus_no" ${l.to === 'bus' ? '' : 'disabled'}><option value="">Choose…</option>${data.buses.map((b) => `<option value="${esc(b)}" ${l.bus_no === b ? 'selected' : ''}>Bus ${esc(b)}</option>`).join('')}</select></div>
+      <div class="field"><label>Position</label><select data-i="${i}" data-k="position" ${l.to === 'bus' ? '' : 'disabled'}><option value="">Choose…</option>${data.positions.map((p) => `<option ${l.position === p ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></div>
+      <div>${lines.length > 1 ? `<button class="btn ghost" type="button" data-rm="${i}">Remove</button>` : ''}</div>
+      ${tyreOf(l.tyre_no) ? `<div class="hint" style="grid-column:1/-1">Now: ${where(tyreOf(l.tyre_no))} · ${km(tyreOf(l.tyre_no).total_km)} so far</div>` : ''}
+    </div>`).join('') + `<datalist id="tyre-list">${data.tyres.map((t) => `<option value="${esc(t.tyre_no)}">`).join('')}</datalist>`;
+    document.querySelectorAll('#mv-lines [data-k]').forEach((el) => el.addEventListener('change', () => {
+      lines[el.dataset.i][el.dataset.k] = el.value;
+      if (el.dataset.k === 'to' && el.value !== 'bus') { lines[el.dataset.i].bus_no = ''; lines[el.dataset.i].position = ''; }
+      drawLines(); drawOdo();
+    }));
+    document.querySelectorAll('#mv-lines [data-rm]').forEach((el) => el.addEventListener('click', () => { lines.splice(Number(el.dataset.rm), 1); drawLines(); drawOdo(); }));
+  };
+  drawLines(); drawOdo();
+  $('#mv-add').addEventListener('click', () => { lines.push({ tyre_no: '', to: '', bus_no: '', position: '' }); drawLines(); });
+  $('#move-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const err = $('#mv-error'); err.hidden = true;
+    const used = lines.filter((l) => l.tyre_no.trim());
+    const odometers = {}; for (const b of involved()) odometers[b] = odo[b] ?? '';
+    try {
+      const r = await postJSON('/api/tyres/move', { date: $('#mv-date').value, odometers, moves: used });
+      toast(`Saved. ${r.moved} tyre${r.moved === 1 ? '' : 's'} moved.`);
+      router();
+    } catch (e) { err.textContent = e.message; err.hidden = false; }
+  });
+  $('#retread-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const err = $('#rt-error'); err.hidden = true;
+    try {
+      const r = await postJSON('/api/tyres/retread-return', { tyre_no: $('#rt-tyre').value, date: $('#rt-date').value, company: $('#rt-co').value, cost: $('#rt-cost').value });
+      toast(r.expense_saved ? 'Saved. The cost was added to the bus expenses.' : 'Saved.');
+      router();
+    } catch (e) { err.textContent = e.message; err.hidden = false; }
+  });
+  $('#add-tyres').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const err = $('#at-error'); err.hidden = true;
+    try {
+      const r = await postJSON('/api/tyres', { tyre_nos: $('#at-nos').value, make: $('#at-make').value, condition: $('#at-cond').value, km_before: $('#at-km').value });
+      toast(`Added ${r.added} tyre${r.added === 1 ? '' : 's'}.`);
+      router();
+    } catch (e) { err.textContent = e.message; err.hidden = false; }
   });
 }
 
