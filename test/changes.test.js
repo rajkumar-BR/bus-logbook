@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createService } from '../src/service.js';
 
-const TABS = ['Buses', 'Routes', 'Route assignments', 'Daily reports', 'Trips', 'Entries', 'Parts changed', 'Workshops', 'Lists', 'Settings', 'Bus documents', 'Change log'];
+const TABS = ['Buses', 'Routes', 'Route assignments', 'Daily reports', 'Trips', 'Entries', 'Parts changed', 'Workshops', 'Lists', 'Settings', 'Bus documents', 'Change log', 'Trip settings'];
 
 function memoryStorage(initial = {}) {
   const tables = Object.fromEntries(TABS.map((tab) => [tab, initial[tab] || []]));

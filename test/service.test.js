@@ -5,7 +5,7 @@ import { createService } from '../src/service.js';
 function memoryStorage(initial = {}) {
   const tables = Object.fromEntries([
     'Buses', 'Routes', 'Route assignments', 'Daily reports', 'Trips', 'Entries', 'Parts changed',
-    'Workshops', 'Lists', 'Settings', 'Bus documents', 'Change log', 'Tyres', 'Tyre fitments', 'Tyre retreads',
+    'Workshops', 'Lists', 'Settings', 'Bus documents', 'Change log', 'Tyres', 'Tyre fitments', 'Tyre retreads', 'Trip settings',
   ].map((tab) => [tab, initial[tab] || []]));
   return {
     tables,
@@ -362,4 +362,99 @@ test('planned km is set once per trip and applied to every day', async () => {
   assert.deepEqual(await km(), [[20, 5], [22, 0]]); // the typed 5 km is ignored
   await service.setTripTimes('R01', { planned_km: 25, planned_evening_km: 22 });
   assert.deepEqual(await km(), [[25, 0], [22, 0]]); // changing the setting changes every day
+});
+
+test('stops come from the trip setting, not from the daily form', async () => {
+  const storage = memoryStorage({
+    Buses: [{ bus_no: '01', active: true }],
+    Routes: [{ route_id: 'R01', route_name: 'Kurur', notes: 'Starts 7.40 AM at Valaiyur, reaches school 9.00 AM', expected_start: '07:40', expected_end: '09:00', planned_km: 20, planned_evening_km: 20 }],
+    'Route assignments': [{ bus_no: '01', route_id: 'R01', from_date: '2026-06-01' }],
+  });
+  const service = createService(storage, { today: () => '2026-10-23', user: 'test' });
+  const leg = (session, s, e) => ({ trip_number: 1, session, origin: 'typed', destination: 'typed', planned_km: 1, start_odometer_km: s, end_odometer_km: e, scheduled_start: '07:40', scheduled_end: '09:00', actual_start: '07:40', actual_end: '09:00' });
+  await service.saveDailyReport({ report_date: '2026-10-23', bus_no: '01', driver_name: 'D', income_collected: 0, expenses: 0, trips: [leg('Morning', 10, 30), leg('Evening', 50, 70)] });
+  const stops = async () => (await service.getDailyReport('2026-10-23', '2026-10-23')).buses[0].trips.map((t) => `${t.origin} > ${t.destination}`);
+  assert.deepEqual(await stops(), ['Valaiyur > School', 'School > Valaiyur']); // first stop read from the route notes
+  await service.setTripTimes('R01', { start_stop: 'Valaiyur', end_stop: 'Kannapadi' });
+  assert.deepEqual(await stops(), ['Valaiyur > School', 'School > Kannapadi']); // changes every day
+});
+
+test('a change to a trip applies from its start date; earlier days keep the old stops, times and planned km', async () => {
+  const storage = memoryStorage({
+    Buses: [{ bus_no: '01', active: true }],
+    Routes: [{ route_id: 'R01', route_name: 'Kurur', start_stop: 'Valaiyur', expected_start: '07:00', expected_end: '08:00', planned_km: 20 }],
+    'Route assignments': [{ bus_no: '01', route_id: 'R01', from_date: '2026-06-01' }],
+  });
+  const service = createService(storage, { today: () => '2026-10-23', user: 'test' });
+  const day = (date, o) => ({ report_date: date, bus_no: '01', driver_name: 'D', income_collected: 0, expenses: 0, trips: [{ trip_number: 1, session: 'Morning', origin: '', destination: '', planned_km: 1, start_odometer_km: o, end_odometer_km: o + 30, scheduled_start: '07:00', scheduled_end: '08:00', actual_start: '07:00', actual_end: '08:00' }] });
+  await service.saveDailyReport(day('2026-10-10', 100));
+  await assert.rejects(service.setTripTimes('R01', { effective_from: '15/10', start_stop: 'X' }), /valid date/);
+  const r = await service.setTripTimes('R01', { effective_from: '2026-10-15', start_stop: 'Pudhur', expected_start: '07:30', expected_end: '08:30', planned_km: 30 });
+  assert.equal(r.effective_from, '2026-10-15');
+  await service.saveDailyReport(day('2026-10-20', 200));
+  const t = async (date) => { const x = (await service.getDailyReport(date, date)).buses[0].trips[0]; return [x.origin, x.scheduled_start, x.planned_km, x.extra_km]; };
+  assert.deepEqual(await t('2026-10-10'), ['Valaiyur', '07:00', 20, 10]);
+  assert.deepEqual(await t('2026-10-20'), ['Pudhur', '07:30', 30, 0]);
+  assert.deepEqual((await service.getTripPlans('01', '2026-10-12')).plans[0].start_stop, 'Valaiyur');
+  assert.deepEqual((await service.getTripPlans('01', '2026-10-15')).plans[0].start_stop, 'Pudhur');
+  // editing the same date again replaces that change; "all days" changes the base
+  await service.setTripTimes('R01', { effective_from: '2026-10-15', start_stop: 'Pudhur', expected_start: '07:30', expected_end: '08:30', planned_km: 28 });
+  assert.equal((await service.getTripPlans('01', '2026-10-16')).plans[0].planned_km, 28);
+  assert.equal(storage.tables['Trip settings'].length, 1);
+  await service.setTripTimes('R01', { all_days: true, planned_km: 21 });
+  assert.equal((await service.getTripPlans('01', '2026-10-12')).plans[0].planned_km, 21);
+  assert.equal((await service.getTripPlans('01', '2026-10-16')).plans[0].planned_km, 28);
+});
+
+test('Sundays are not listed, and the evening planned km follows the morning one when not set', async () => {
+  const storage = memoryStorage({
+    Buses: [{ bus_no: '01', active: true }],
+    Routes: [{ route_id: 'R01', route_name: 'Kurur', start_stop: 'Valaiyur', planned_km: 20 }],
+    'Route assignments': [{ bus_no: '01', route_id: 'R01', from_date: '2026-06-01' }],
+  });
+  const service = createService(storage, { today: () => '2026-10-23', user: 'test' });
+  // 2026-10-18 is a Sunday
+  const rows = (await service.getDailyReport('2026-10-17', '2026-10-19')).buses.map((r) => r.report_date);
+  assert.deepEqual(rows, ['2026-10-17', '2026-10-19']);
+  assert.equal((await service.getTripPlans('01', '2026-10-19')).plans.length, 1);
+  await service.saveDailyReport({ report_date: '2026-10-18', bus_no: '01', driver_name: 'D', income_collected: 0, expenses: 0, trips: [{ trip_number: 1, session: 'Evening', origin: '', destination: '', planned_km: 1, start_odometer_km: 10, end_odometer_km: 40, scheduled_start: '15:00', scheduled_end: '16:00', actual_start: '15:00', actual_end: '16:00' }] });
+  const sunday = (await service.getDailyReport('2026-10-17', '2026-10-19')).buses.map((r) => r.report_date);
+  assert.deepEqual(sunday, ['2026-10-17', '2026-10-18', '2026-10-19']); // a Sunday with a report is shown
+  const eve = (await service.getDailyReport('2026-10-18', '2026-10-18')).buses[0].trips[0];
+  assert.equal(eve.planned_km, 20); // no evening km set: same as the morning
+  assert.equal(eve.extra_km, 10);
+});
+
+test('on Saturdays a two-trip bus runs one combined trip with its own stops, times and planned km', async () => {
+  const storage = memoryStorage({
+    Buses: [{ bus_no: '02', active: true }, { bus_no: '01', active: true }],
+    Routes: [
+      { route_id: 'R02', route_name: 'Kurur', start_stop: 'Nakkaselam', expected_start: '08:10', expected_end: '08:30', planned_km: 7 },
+      { route_id: 'R02-T2', route_name: 'Perahambi', start_stop: 'Perahambi', expected_start: '08:45', expected_end: '09:05', planned_km: 14 },
+      { route_id: 'R01', route_name: 'Valaiyur', start_stop: 'Valaiyur', expected_start: '07:40', expected_end: '09:00', planned_km: 29 },
+    ],
+    'Route assignments': [{ bus_no: '02', route_id: 'R02', from_date: '2026-06-01' }, { bus_no: '02', route_id: 'R02-T2', from_date: '2026-06-01' }, { bus_no: '01', route_id: 'R01', from_date: '2026-06-01' }],
+  });
+  const service = createService(storage, { today: () => '2026-10-30', user: 'test' });
+  const plans = async (bus, date) => (await service.getTripPlans(bus, date)).plans;
+  assert.equal((await plans('02', '2026-10-24')).length, 2); // Saturday plan not set yet: normal trips
+  await service.setTripTimes('R02', { day_type: 'Saturday', start_stop: 'Nakkaselam', end_stop: 'Perahambi', expected_start: '07:50', expected_end: '09:00', expected_evening_start: '12:30', expected_evening_end: '13:40', planned_km: 25 });
+  const sat = await plans('02', '2026-10-24');
+  assert.equal(sat.length, 1);
+  assert.deepEqual([sat[0].start_stop, sat[0].expected_start, sat[0].planned_km], ['Nakkaselam', '07:50', 25]);
+  assert.equal((await plans('02', '2026-10-23')).length, 2); // Friday: two trips
+  assert.equal((await plans('01', '2026-10-24')).length, 1); // one-trip buses are not affected
+  const row = (await service.getDailyReport('2026-10-24', '2026-10-24', '02')).buses[0];
+  assert.equal(row.trips_expected, 1);
+  const leg = (session, s, e) => ({ trip_number: 1, session, origin: '', destination: '', planned_km: 1, start_odometer_km: s, end_odometer_km: e, scheduled_start: '07:00', scheduled_end: '08:00', actual_start: '07:50', actual_end: '09:00' });
+  await service.saveDailyReport({ report_date: '2026-10-24', bus_no: '02', driver_name: 'D', income_collected: 0, expenses: 0, trips: [leg('Morning', 10, 35), leg('Evening', 40, 66)] });
+  const saved = (await service.getDailyReport('2026-10-24', '2026-10-24', '02')).buses[0];
+  assert.deepEqual(saved.trips.map((t) => [t.origin, t.destination, t.planned_km, t.extra_km]), [['Nakkaselam', 'School', 25, 0], ['School', 'Perahambi', 25, 1]]);
+  assert.equal(saved.trip_count, 1);
+  // a change from a date: later Saturdays use the new plan, earlier ones the old
+  await service.setTripTimes('R02', { day_type: 'Saturday', effective_from: '2026-10-31', planned_km: 30 });
+  assert.equal((await plans('02', '2026-10-24'))[0].planned_km, 25);
+  assert.equal((await plans('02', '2026-10-31'))[0].planned_km, 30);
+  assert.equal((await plans('02', '2026-10-31'))[0].expected_start, '07:50'); // fields not sent keep what was in force
+  assert.equal((await service.getBus('02')).bus.trip_plans.length, 2); // Edit bus still shows the two weekday trips
 });

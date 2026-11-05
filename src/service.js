@@ -20,7 +20,7 @@ function localNow() {
 export function createService(storage, { readBill = null, today = localToday, user = process.env.OFFICE_USER || os.userInfo().username } = {}) {
   async function load() {
     const t = {};
-    for (const tab of ['Buses', 'Routes', 'Route assignments', 'Daily reports', 'Trips', 'Entries', 'Parts changed', 'Workshops', 'Lists', 'Settings', 'Bus documents']) {
+    for (const tab of ['Buses', 'Routes', 'Route assignments', 'Daily reports', 'Trips', 'Entries', 'Parts changed', 'Workshops', 'Lists', 'Settings', 'Bus documents', 'Trip settings']) {
       t[tab] = await storage.read(tab);
     }
     const lists = { ...DEFAULT_LISTS, ...L.listsFrom(t.Lists) };
@@ -35,6 +35,7 @@ export function createService(storage, { readBill = null, today = localToday, us
       parts: t['Parts changed'].filter(L.isActive),
       workshops: t.Workshops.map((w) => w.workshop_name).filter(Boolean),
       docs: t['Bus documents'],
+      tripSettings: t['Trip settings'],
       lists,
       settings: L.settingsMap(t.Settings),
     };
@@ -65,23 +66,60 @@ export function createService(storage, { readBill = null, today = localToday, us
   };
 
   // The trips a bus runs today, in order, with the expected pick-up and drop-off time set on each trip's route.
-  const tripPlans = (d, busNo) => {
-    const t = today();
+  // The settings in force on a date: the latest dated change on or before it, else the trip's base settings.
+  const weekdayPlans = (d, busNo, date) => {
+    const t = date;
     return d.assignments
       .filter((a) => a.bus_no === busNo && a.from_date && a.from_date <= t && (!a.to_date || a.to_date >= t))
       .map((a, i) => {
-        const r = d.routes.find((x) => x.route_id === a.route_id) || {};
-        return { trip_number: i + 1, route_id: a.route_id, route_name: r.route_name || a.route_id, expected_start: r.expected_start || '', expected_end: r.expected_end || '', expected_evening_start: r.expected_evening_start || '', expected_evening_end: r.expected_evening_end || '', planned_km: r.planned_km ?? '', planned_evening_km: r.planned_evening_km ?? '' };
+        const base = d.routes.find((x) => x.route_id === a.route_id) || {};
+        const history = (d.tripSettings || []).filter((x) => x.route_id === a.route_id && x.effective_from && !x.day_type).sort((x, y) => String(x.effective_from).localeCompare(String(y.effective_from)));
+        const r = { ...base, ...([...history].reverse().find((x) => x.effective_from <= t) || {}), route_name: base.route_name, notes: base.notes };
+        // first stop: the one set for the trip, else read from the route's notes ("Starts 7.40 AM at X, ..." or "Trip 1: X 7.40 AM ...")
+        const first = String(r.start_stop || '').trim()
+          || (String(r.notes || '').match(/Starts [\d.: ]*(?:AM|PM)? ?at (.+?), reaches school/i)?.[1]
+          || String(r.notes || '').match(/^Trip \d+: (.+?) \d+\.\d+ ?[AP]M/i)?.[1] || '').trim();
+        return { trip_number: i + 1, route_id: a.route_id, start_stop: first, end_stop: String(r.end_stop || '').trim() || first, route_name: r.route_name || a.route_id, expected_start: r.expected_start || '', expected_end: r.expected_end || '', expected_evening_start: r.expected_evening_start || '', expected_evening_end: r.expected_evening_end || '', planned_km: r.planned_km ?? '', planned_evening_km: r.planned_evening_km ?? '',
+          history: history.map((x) => ({ effective_from: x.effective_from, start_stop: x.start_stop || '', end_stop: x.end_stop || '', expected_start: x.expected_start || '', expected_end: x.expected_end || '', expected_evening_start: x.expected_evening_start || '', expected_evening_end: x.expected_evening_end || '', planned_km: x.planned_km ?? '', planned_evening_km: x.planned_evening_km ?? '' })) };
       });
   };
+  // First stop of a route when none is set: read from its notes ("Starts 7.40 AM at X, ..." or "Trip 1: X 7.40 AM ...").
+  const firstStopOf = (route) => String(route?.notes || '').match(/Starts [\d.: ]*(?:AM|PM)? ?at (.+?), reaches school/i)?.[1] || String(route?.notes || '').match(/^Trip \d+: (.+?) \d+\.\d+ ?[AP]M/i)?.[1] || '';
+  // On Saturdays a bus that runs two or more trips runs one combined trip instead (same first stop, straight to school), with its own times and planned km.
+  // The Saturday plan is kept on the bus's first trip with day_type 'Saturday'.
+  const saturdayPlan = (d, busNo, date) => {
+    const list = d.assignments.filter((a) => a.bus_no === busNo && a.from_date && a.from_date <= date && (!a.to_date || a.to_date >= date));
+    if (list.length < 2) return null;
+    const route = d.routes.find((x) => x.route_id === list[0].route_id) || {};
+    const history = (d.tripSettings || []).filter((x) => x.route_id === list[0].route_id && x.day_type === 'Saturday' && x.effective_from).sort((x, y) => String(x.effective_from).localeCompare(String(y.effective_from)));
+    const r = [...history].reverse().find((x) => x.effective_from <= date);
+    const first = String(r?.start_stop || '').trim() || firstStopOf(route).trim();
+    return {
+      trip_number: 1, route_id: list[0].route_id, set: Boolean(r), route_name: `${route.route_name || list[0].route_id} (Saturday, combined)`,
+      start_stop: first, end_stop: String(r?.end_stop || '').trim() || first,
+      expected_start: r?.expected_start || '', expected_end: r?.expected_end || '', expected_evening_start: r?.expected_evening_start || '', expected_evening_end: r?.expected_evening_end || '',
+      planned_km: r?.planned_km ?? '', planned_evening_km: r?.planned_evening_km ?? '',
+      history: history.map((x) => ({ effective_from: x.effective_from, start_stop: x.start_stop || '', end_stop: x.end_stop || '', expected_start: x.expected_start || '', expected_end: x.expected_end || '', expected_evening_start: x.expected_evening_start || '', expected_evening_end: x.expected_evening_end || '', planned_km: x.planned_km ?? '', planned_evening_km: x.planned_evening_km ?? '' })),
+    };
+  };
+  const tripPlans = (d, busNo, date = today()) => {
+    if (new Date(`${date}T00:00:00`).getDay() === 6) {
+      const sat = saturdayPlan(d, busNo, date);
+      if (sat && sat.set) return [sat];
+    }
+    return weekdayPlans(d, busNo, date);
+  };
   // A trip has a morning leg (first stop to school) and an evening leg (school to the drop-offs). Older records have no session and are morning legs.
+  const hasKm = (v) => v !== '' && v != null && Number(v) > 0;
   const SESSIONS = ['Morning', 'Evening'];
   const sessionOf = (t) => (t.session === 'Evening' ? 'Evening' : 'Morning');
   // Lateness is judged on the morning leg only. Extra km counts on both legs.
   const metricsFor = (trip) => (sessionOf(trip) === 'Evening' ? { ...L.tripMetrics(trip), on_time: true, late_by_minutes: 0 } : L.tripMetrics(trip));
   // Expected times and planned km are set once per trip (Edit bus → Trip times) and read for every day.
-  const expectedFor = (plan, session) => (plan ? (session === 'Evening' ? { start: plan.expected_evening_start, end: plan.expected_evening_end, km: plan.planned_evening_km } : { start: plan.expected_start, end: plan.expected_end, km: plan.planned_km }) : {});
-  const hasKm = (v) => v !== '' && v != null && Number(v) > 0;
+  // Morning runs from the first stop to the school; evening from the school to the last drop-off.
+  const expectedFor = (plan, session) => (plan ? (session === 'Evening'
+    ? { start: plan.expected_evening_start, end: plan.expected_evening_end, km: hasKm(plan.planned_evening_km) ? plan.planned_evening_km : plan.planned_km, origin: plan.end_stop ? 'School' : '', destination: plan.end_stop }
+    : { start: plan.expected_start, end: plan.expected_end, km: plan.planned_km, origin: plan.start_stop, destination: plan.start_stop ? 'School' : '' }) : {});
   const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
   // ---------- reads
@@ -179,7 +217,7 @@ export function createService(storage, { readBill = null, today = localToday, us
 
     return {
       today: t,
-      bus: { ...b, status: b.status || STATUS.ON_ROUTE, route: currentRoute(d, busNo), trip_plans: tripPlans(d, busNo) },
+      bus: { ...b, status: b.status || STATUS.ON_ROUTE, route: currentRoute(d, busNo), trip_plans: weekdayPlans(d, busNo, today()), saturday_plan: saturdayPlan(d, busNo, today()) },
       facts: {
         odometer: svc.odometer,
         last_service: svc.last ? svc.last.date_in : '',
@@ -241,13 +279,16 @@ export function createService(storage, { readBill = null, today = localToday, us
     const selectedBus = String(busNo || '').trim();
     if (selectedBus && !active.some((bus) => bus.bus_no === selectedBus)) throw new UserError(`Bus ${selectedBus} is not active or does not exist.`, 404);
     const buses = selectedBus ? active.filter((bus) => bus.bus_no === selectedBus) : active;
-    const days = Array.from({ length: dayCount }, (_, index) => L.addDays(from, index));
+    // Buses do not run on Sundays, so those days are not listed (unless something was reported on one).
+    const isSunday = (date) => new Date(`${date}T00:00:00`).getDay() === 0;
+    const days = Array.from({ length: dayCount }, (_, index) => L.addDays(from, index))
+      .filter((date) => !isSunday(date) || d.dailyReports.some((r) => r.report_date === date) || d.trips.some((t) => t.trip_date === date));
     const allRows = days.flatMap((reportDate) => {
       const reports = d.dailyReports.filter((report) => report.report_date === reportDate);
       const trips = d.trips.filter((trip) => trip.trip_date === reportDate).sort((a, b) => (Number(a.trip_number) - Number(b.trip_number)) || (SESSIONS.indexOf(sessionOf(a)) - SESSIONS.indexOf(sessionOf(b))) || String(a.actual_start).localeCompare(String(b.actual_start)));
       return buses.map((bus) => {
         const daily = reports.find((report) => report.bus_no === bus.bus_no);
-        const plans = tripPlans(d, bus.bus_no);
+        const plans = tripPlans(d, bus.bus_no, reportDate);
         const busTrips = trips.filter((trip) => trip.bus_no === bus.bus_no).map((saved) => {
           // Expected times are read from the trip's route, so changing them there changes every day (past ones too).
           const plan = plans[Number(saved.trip_number) - 1];
@@ -256,6 +297,7 @@ export function createService(storage, { readBill = null, today = localToday, us
           if (HHMM.test(exp.start)) trip.scheduled_start = exp.start;
           if (HHMM.test(exp.end)) trip.scheduled_end = exp.end;
           trip.session = sessionOf(saved);
+          if (exp.origin && exp.destination) { trip.origin = exp.origin; trip.destination = exp.destination; }
           trip.planned_from_plan = hasKm(exp.km);
           if (trip.planned_from_plan) trip.planned_km = Number(exp.km);
           Object.assign(trip, metricsFor(trip), trip.planned_from_plan ? {} : { extra_km: saved.extra_km, actual_km: saved.actual_km });
@@ -274,7 +316,7 @@ export function createService(storage, { readBill = null, today = localToday, us
           route: currentRoute(d, bus.bus_no),
           status: !reported ? 'Not reported' : lateTrips ? 'Late' : 'On time',
           trip_count: new Set(busTrips.map((trip) => Number(trip.trip_number))).size,
-          trips_expected: tripsPerDay(d, bus.bus_no),
+          trips_expected: Math.max(1, plans.length),
           late_trips: lateTrips,
           income_collected: Number(daily?.income_collected) || 0,
           expenses: Number(daily?.expenses) || 0,
@@ -332,12 +374,12 @@ export function createService(storage, { readBill = null, today = localToday, us
     const photoFor = Array.isArray(input.photo_for) ? input.photo_for.map(Number) : photos.map((_, i) => i);
     if (photoFor.length !== photos.length || new Set(photoFor).size !== photoFor.length || photoFor.some((i) => !Number.isInteger(i) || i < 0 || i >= tripInputs.length)) throw new UserError('The photos do not match the trips.');
     const photoOfTrip = tripInputs.map((_, i) => (photoFor.includes(i) ? photos[photoFor.indexOf(i)] : null));
-    const plansNow = tripPlans(await load(), report.bus_no);
+    const plansNow = tripPlans(await load(), report.bus_no, report.report_date);
     const trips = tripInputs.map((item, index) => ({
       trip_number: item.trip_number === undefined || item.trip_number === '' ? index + 1 : Number(item.trip_number),
       session: item.session === undefined || item.session === '' ? 'Morning' : String(item.session),
-      origin: String(item.origin || '').trim(),
-      destination: String(item.destination || '').trim(),
+      origin: expectedFor(plansNow[Number(item.trip_number || index + 1) - 1], item.session).origin || String(item.origin || '').trim(),
+      destination: expectedFor(plansNow[Number(item.trip_number || index + 1) - 1], item.session).destination || String(item.destination || '').trim(),
       scheduled_start: HHMM.test(expectedFor(plansNow[Number(item.trip_number || index + 1) - 1], item.session).start || '') ? expectedFor(plansNow[Number(item.trip_number || index + 1) - 1], item.session).start : String(item.scheduled_start || '').trim(),
       actual_start: String(item.actual_start || '').trim(),
       scheduled_end: HHMM.test(expectedFor(plansNow[Number(item.trip_number || index + 1) - 1], item.session).end || '') ? expectedFor(plansNow[Number(item.trip_number || index + 1) - 1], item.session).end : String(item.scheduled_end || '').trim(),
@@ -436,32 +478,71 @@ export function createService(storage, { readBill = null, today = localToday, us
     });
   }
 
+  // Stops, expected times and planned km of a trip. With input.effective_from the change applies from that day onwards
+  // and earlier days keep what they had; without it (or with all_days) it replaces the trip's base settings, so every day without a dated change follows.
   async function setTripTimes(routeId, input) {
-    const start = String(input.expected_start ?? '').trim();
-    const end = String(input.expected_end ?? '').trim();
-    const evening = 'expected_evening_start' in input || 'expected_evening_end' in input;
-    const eStart = String(input.expected_evening_start ?? '').trim();
-    const eEnd = String(input.expected_evening_end ?? '').trim();
     const kmOf = (v, label) => { const t = String(v ?? '').trim(); if (t === '') return ''; const n = Number(t); if (!Number.isFinite(n) || n <= 0) throw new UserError(`${label} must be more than zero.`); return n; };
-    const kmGiven = 'planned_km' in input || 'planned_evening_km' in input;
-    const pKm = kmOf(input.planned_km, 'Morning planned km');
-    const pEveKm = kmOf(input.planned_evening_km, 'Evening planned km');
-    for (const v of [start, end, eStart, eEnd]) if (v && !HHMM.test(v)) throw new UserError('Enter times as hours and minutes, like 07:40.');
-    if (start && end && start >= end) throw new UserError('The drop-off time must be after the pick-up time.');
-    if (eStart && eEnd && eStart >= eEnd) throw new UserError('The evening drop-off time must be after the evening pick-up time.');
+    const given = {
+      start_stop: 'start_stop' in input, end_stop: 'end_stop' in input,
+      expected_start: 'expected_start' in input, expected_end: 'expected_end' in input,
+      expected_evening_start: 'expected_evening_start' in input, expected_evening_end: 'expected_evening_end' in input,
+      planned_km: 'planned_km' in input, planned_evening_km: 'planned_evening_km' in input,
+    };
+    const text = (k) => String(input[k] ?? '').trim();
+    const vals = {
+      start_stop: text('start_stop'), end_stop: text('end_stop'),
+      expected_start: text('expected_start'), expected_end: text('expected_end'),
+      expected_evening_start: text('expected_evening_start'), expected_evening_end: text('expected_evening_end'),
+      planned_km: kmOf(input.planned_km, 'Morning planned km'), planned_evening_km: kmOf(input.planned_evening_km, 'Evening planned km'),
+    };
+    for (const k of ['expected_start', 'expected_end', 'expected_evening_start', 'expected_evening_end']) if (vals[k] && !HHMM.test(vals[k])) throw new UserError('Enter times as hours and minutes, like 07:40.');
+    if (vals.expected_start && vals.expected_end && vals.expected_start >= vals.expected_end) throw new UserError('The drop-off time must be after the pick-up time.');
+    if (vals.expected_evening_start && vals.expected_evening_end && vals.expected_evening_start >= vals.expected_evening_end) throw new UserError('The evening drop-off time must be after the evening pick-up time.');
+    const saturday = input.day_type === 'Saturday';
+    let from = input.all_days ? '' : String(input.effective_from || '').trim();
+    if (saturday && !from) from = '2000-01-01'; // a Saturday plan always has a start date; this one covers every Saturday
+    if (from && (!/^\d{4}-\d{2}-\d{2}$/.test(from) || Number.isNaN(Date.parse(`${from}T00:00:00`)))) throw new UserError('Choose a valid date for the change to start.');
     const now = localNow();
     return storage.transact((tx) => {
       const route = tx.read('Routes').find((r) => r.route_id === routeId);
       if (!route) throw new UserError('There is no such trip.', 404);
       const log = [];
-      for (const [field, v] of [['expected_start', start], ['expected_end', end], ...(evening ? [['expected_evening_start', eStart], ['expected_evening_end', eEnd]] : []), ...(kmGiven ? [['planned_km', pKm], ['planned_evening_km', pEveKm]] : [])]) {
-        if (String(route[field] ?? '') !== v) log.push({ timestamp: now, user, action: 'Updated', tab: 'Routes', record_id: routeId, field, old_value: String(route[field] ?? ''), new_value: String(v) });
+      if (!from && !saturday) {
+        for (const [field, v] of Object.entries(vals)) {
+          if (!given[field]) continue;
+          if (String(route[field] ?? '') !== String(v)) log.push({ timestamp: now, user, action: 'Updated', tab: 'Routes', record_id: routeId, field, old_value: String(route[field] ?? ''), new_value: String(v) });
+        }
+        if (!log.length) return { route_id: routeId, changed: 0 };
+        tx.update('Routes', (r) => r.route_id === routeId, Object.fromEntries(Object.entries(vals).filter(([k]) => given[k])));
+        tx.append('Change log', log);
+        return { route_id: routeId, changed: log.length };
       }
+      // dated change: a full row of settings; fields not sent keep what was in force on that day
+      const kind = saturday ? 'Saturday' : '';
+      const rows = tx.read('Trip settings').filter((x) => x.route_id === routeId && x.effective_from && (x.day_type || '') === kind);
+      const before = [...rows].sort((x, y) => String(x.effective_from).localeCompare(String(y.effective_from))).reverse().find((x) => x.effective_from <= from) || (saturday ? {} : route);
+      const row = { route_id: routeId, effective_from: from, day_type: kind, changed_by: user, changed_at: now };
+      for (const k of Object.keys(vals)) row[k] = given[k] ? vals[k] : (before[k] ?? '');
+      for (const k of Object.keys(vals)) {
+        if (String(before[k] ?? '') !== String(row[k])) log.push({ timestamp: now, user, action: 'Updated', tab: 'Trip settings', record_id: `${routeId}${saturday ? ' Saturdays' : ''} from ${from}`, field: k, old_value: String(before[k] ?? ''), new_value: String(row[k]) });
+      }
+      const same = rows.find((x) => x.effective_from === from);
+      if (!log.length && !same) return { route_id: routeId, changed: 0 };
+      if (same) tx.update('Trip settings', (x) => x.route_id === routeId && x.effective_from === from && (x.day_type || '') === kind, row);
+      else tx.append('Trip settings', [row]);
       if (!log.length) return { route_id: routeId, changed: 0 };
-      tx.update('Routes', (r) => r.route_id === routeId, { expected_start: start, expected_end: end, ...(evening ? { expected_evening_start: eStart, expected_evening_end: eEnd } : {}), ...(kmGiven ? { planned_km: pKm, planned_evening_km: pEveKm } : {}) });
       tx.append('Change log', log);
-      return { route_id: routeId, changed: log.length };
+      return { route_id: routeId, changed: log.length, effective_from: from };
     });
+  }
+
+  // The trips a bus runs on a day, with the stops, times and planned km in force that day.
+  async function getTripPlans(busNo, date) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date)) || Number.isNaN(Date.parse(`${date}T00:00:00`))) throw new UserError('Choose a valid date.');
+    const d = await load();
+    if (!activeBuses(d).some((b) => b.bus_no === busNo)) throw new UserError('Choose an active bus.');
+    const plans = tripPlans(d, busNo, date);
+    return { trips: Math.max(1, plans.length), plans };
   }
 
   // Correct a saved trip: actual times, odometer readings, planned km. Expected times come from the trip's route.
@@ -476,11 +557,11 @@ export function createService(storage, { readBill = null, today = localToday, us
       next.start_odometer_km = num(input.start_odometer_km ?? trip.start_odometer_km, 'Start km');
       next.end_odometer_km = num(input.end_odometer_km ?? trip.end_odometer_km, 'End km');
       next.planned_km = num(input.planned_km ?? trip.planned_km, 'Planned km');
-      const planKm = expectedFor(tripPlans({ assignments: tx.read('Route assignments'), routes: tx.read('Routes') }, trip.bus_no)[Number(trip.trip_number) - 1], sessionOf(trip)).km;
+      const planKm = expectedFor(tripPlans({ assignments: tx.read('Route assignments'), routes: tx.read('Routes'), tripSettings: tx.read('Trip settings') }, trip.bus_no, trip.trip_date)[Number(trip.trip_number) - 1], sessionOf(trip)).km;
       if (hasKm(planKm)) next.planned_km = Number(planKm);
       if (next.end_odometer_km <= next.start_odometer_km) throw new UserError('End km must be more than start km.');
       if ('notes' in input) next.notes = String(input.notes ?? '').trim();
-      const plan = tripPlans({ assignments: tx.read('Route assignments'), routes: tx.read('Routes') }, trip.bus_no)[Number(trip.trip_number) - 1];
+      const plan = tripPlans({ assignments: tx.read('Route assignments'), routes: tx.read('Routes'), tripSettings: tx.read('Trip settings') }, trip.bus_no, trip.trip_date)[Number(trip.trip_number) - 1];
       const merged = { ...trip, ...next };
       const exp = expectedFor(plan, sessionOf(trip));
       if (HHMM.test(exp.start)) merged.scheduled_start = exp.start;
@@ -1089,5 +1170,5 @@ export function createService(storage, { readBill = null, today = localToday, us
     return I.buildTemplate({ kinds: lists.entry_kinds, systems: lists.systems });
   }
 
-  return { getLists, getFleet, getBus, getEntry, getRepeats, getDailyReport, saveDailyReport, saveExpense, setTripTimes, updateTrip, getTyres, addTyres, moveTyres, returnRetread, checkRepeat, readBillFields, saveEntry, voidEntry, addBus, updateBus, listBuses, getChangeLog, importWorkbook, importTemplate };
+  return { getLists, getFleet, getBus, getEntry, getRepeats, getDailyReport, saveDailyReport, saveExpense, setTripTimes, updateTrip, getTyres, addTyres, moveTyres, returnRetread, getTripPlans, checkRepeat, readBillFields, saveEntry, voidEntry, addBus, updateBus, listBuses, getChangeLog, importWorkbook, importTemplate };
 }

@@ -217,6 +217,7 @@ app.post('/api/buses', wrap((req) => req.service.addBus(req.body)));
 app.get('/api/buses/:busNo', wrap((req) => req.service.getBus(req.params.busNo)));
 app.put('/api/buses/:busNo', wrap((req) => req.service.updateBus(req.params.busNo, req.body || {})));
 app.put('/api/routes/:routeId/times', wrap((req) => req.service.setTripTimes(req.params.routeId, req.body || {})));
+app.get('/api/trip-plans', wrap((req) => req.service.getTripPlans(String(req.query.bus_no || ''), String(req.query.date || ''))));
 app.put('/api/trips/:tripId', wrap((req) => req.service.updateTrip(req.params.tripId, req.body || {})));
 app.get('/api/tyres', wrap((req) => req.service.getTyres()));
 app.post('/api/tyres', wrap((req) => req.service.addTyres(req.body || {})));

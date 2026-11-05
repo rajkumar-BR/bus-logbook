@@ -4,7 +4,7 @@ import ExcelJS from 'exceljs';
 import { createService } from '../src/service.js';
 import { buildTemplate, parseWorkbook } from '../src/importer.js';
 
-const TABS = ['Buses', 'Routes', 'Route assignments', 'Daily reports', 'Trips', 'Entries', 'Parts changed', 'Workshops', 'Lists', 'Settings', 'Bus documents', 'Change log'];
+const TABS = ['Buses', 'Routes', 'Route assignments', 'Daily reports', 'Trips', 'Entries', 'Parts changed', 'Workshops', 'Lists', 'Settings', 'Bus documents', 'Change log', 'Trip settings'];
 
 function memoryStorage(initial = {}) {
   const tables = Object.fromEntries(TABS.map((tab) => [tab, initial[tab] || []]));

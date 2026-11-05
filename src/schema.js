@@ -19,7 +19,7 @@ export const TABS = {
   Routes: [
     ['school_id', 'text'], ['route_id', 'text'], ['route_name', 'text'], ['notes', 'text'],
     ['expected_start', 'text'], ['expected_end', 'text'], ['expected_evening_start', 'text'], ['expected_evening_end', 'text'],
-    ['planned_km', 'number'], ['planned_evening_km', 'number'],
+    ['planned_km', 'number'], ['planned_evening_km', 'number'], ['start_stop', 'text'], ['end_stop', 'text'],
   ],
   'Route assignments': [
     ['school_id', 'text'], ['bus_no', 'text'], ['route_id', 'text'], ['from_date', 'date'], ['to_date', 'date'],
@@ -64,6 +64,11 @@ export const TABS = {
   'Tyre retreads': [
     ['school_id', 'text'], ['retread_id', 'text'], ['tyre_no', 'text'], ['returned_date', 'date'], ['company', 'text'],
     ['cost', 'number'], ['bus_no', 'text'], ['notes', 'text'],
+  ],
+  'Trip settings': [
+    ['school_id', 'text'], ['route_id', 'text'], ['effective_from', 'date'], ['start_stop', 'text'], ['end_stop', 'text'],
+    ['expected_start', 'text'], ['expected_end', 'text'], ['expected_evening_start', 'text'], ['expected_evening_end', 'text'],
+    ['planned_km', 'number'], ['planned_evening_km', 'number'], ['changed_by', 'text'], ['changed_at', 'datetime'], ['day_type', 'text'],
   ],
   'Bus documents': [
     ['school_id', 'text'], ['bus_no', 'text'], ['doc_type', 'text'], ['doc_number', 'text'],
