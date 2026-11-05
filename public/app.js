@@ -937,18 +937,34 @@ async function viewTyres() {
     $('#mv-odo').innerHTML = involved().map((b) => `<div class="field"><label for="odo-${esc(b)}">Bus ${esc(b)} odometer now (km)</label><input id="odo-${esc(b)}" data-bus="${esc(b)}" inputmode="decimal" value="${esc(odo[b] ?? '')}" required></div>`).join('');
     document.querySelectorAll('#mv-odo input').forEach((i) => i.addEventListener('input', () => { odo[i.dataset.bus] = i.value; }));
   };
+  // Which destinations a tyre may be given depends on where it is now (the app enforces the same rules).
+  const optionsFor = (t) => {
+    if (!t) return { dests: [], lockBus: '' };
+    if (t.status === 'Fitted') return { dests: [['bus', `Change position on Bus ${t.bus_no}`], 'In repair', 'At retreader', 'Scrapped'], lockBus: t.bus_no };
+    if (t.status === 'In repair') { const last = t.spells.length ? t.spells[t.spells.length - 1].bus_no : ''; return { dests: [['bus', last ? `Fit back on Bus ${last}` : 'Fit on a bus'], 'At retreader', 'Scrapped'], lockBus: last }; }
+    if (t.status === 'At retreader') return { dests: [], lockBus: '', note: 'This tyre is at the retreader. Use "Retread came back" below when it returns.' };
+    if (t.status === 'Scrapped') return { dests: [], lockBus: '', note: 'This tyre is scrapped.' };
+    return { dests: [['bus', 'Fit on a bus'], 'In repair', 'At retreader', 'Scrapped'], lockBus: '' };
+  };
   const drawLines = () => {
-    $('#mv-lines').innerHTML = lines.map((l, i) => `<div style="display:grid;grid-template-columns:minmax(140px,1.4fr) minmax(130px,1fr) minmax(110px,1fr) minmax(140px,1fr) auto;gap:10px;align-items:end">
+    $('#mv-lines').innerHTML = lines.map((l, i) => {
+      const t = tyreOf(l.tyre_no);
+      const o = optionsFor(t);
+      if (o.lockBus && l.to === 'bus') l.bus_no = o.lockBus;
+      const fit = l.to === 'bus';
+      return `<div style="display:grid;grid-template-columns:minmax(140px,1.4fr) minmax(130px,1.2fr) ${fit ? 'minmax(110px,1fr) minmax(140px,1fr)' : ''} auto;gap:10px;align-items:end">
       <div class="field"><label>Tyre no.</label><input list="tyre-list" data-i="${i}" data-k="tyre_no" value="${esc(l.tyre_no)}" autocomplete="off"></div>
-      <div class="field"><label>Goes to</label><select data-i="${i}" data-k="to"><option value="">Choose…</option><option value="bus" ${l.to === 'bus' ? 'selected' : ''}>Fit on a bus</option>${data.places.map((p) => `<option ${l.to === p ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></div>
-      <div class="field"><label>Bus</label><select data-i="${i}" data-k="bus_no" ${l.to === 'bus' ? '' : 'disabled'}><option value="">Choose…</option>${data.buses.map((b) => `<option value="${esc(b)}" ${l.bus_no === b ? 'selected' : ''}>Bus ${esc(b)}</option>`).join('')}</select></div>
-      <div class="field"><label>Position</label><select data-i="${i}" data-k="position" ${l.to === 'bus' ? '' : 'disabled'}><option value="">Choose…</option>${data.positions.map((p) => `<option ${l.position === p ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></div>
+      <div class="field"><label>Goes to</label><select data-i="${i}" data-k="to" ${o.dests.length ? '' : 'disabled'}><option value="">Choose…</option>${o.dests.map((d) => { const [v, label] = Array.isArray(d) ? d : [d, d]; return `<option value="${esc(v)}" ${l.to === v ? 'selected' : ''}>${esc(label)}</option>`; }).join('')}</select></div>
+      ${fit ? `<div class="field"><label>Bus</label><select data-i="${i}" data-k="bus_no" ${o.lockBus ? 'disabled' : ''}><option value="">Choose…</option>${data.buses.map((b) => `<option value="${esc(b)}" ${l.bus_no === b ? 'selected' : ''}>Bus ${esc(b)}</option>`).join('')}</select></div>
+      <div class="field"><label>Position</label><select data-i="${i}" data-k="position"><option value="">Choose…</option>${data.positions.map((p) => `<option ${l.position === p ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></div>` : ''}
       <div>${lines.length > 1 ? `<button class="btn ghost" type="button" data-rm="${i}">Remove</button>` : ''}</div>
-      ${tyreOf(l.tyre_no) ? `<div class="hint" style="grid-column:1/-1">Now: ${where(tyreOf(l.tyre_no))} · ${km(tyreOf(l.tyre_no).total_km)} so far</div>` : ''}
-    </div>`).join('') + `<datalist id="tyre-list">${data.tyres.map((t) => `<option value="${esc(t.tyre_no)}">`).join('')}</datalist>`;
+      ${t ? `<div class="hint" style="grid-column:1/-1">Now: ${where(t)} · ${km(t.total_km)} so far${o.note ? ` · ${esc(o.note)}` : ''}</div>` : (l.tyre_no.trim() ? '<div class="hint" style="grid-column:1/-1">This tyre is not in the list. Add it first.</div>' : '')}
+    </div>`; }).join('') + `<datalist id="tyre-list">${data.tyres.map((t) => `<option value="${esc(t.tyre_no)}">`).join('')}</datalist>`;
     document.querySelectorAll('#mv-lines [data-k]').forEach((el) => el.addEventListener('change', () => {
-      lines[el.dataset.i][el.dataset.k] = el.value;
-      if (el.dataset.k === 'to' && el.value !== 'bus') { lines[el.dataset.i].bus_no = ''; lines[el.dataset.i].position = ''; }
+      const l = lines[el.dataset.i];
+      l[el.dataset.k] = el.value;
+      if (el.dataset.k === 'tyre_no') { l.to = ''; l.bus_no = ''; l.position = ''; }
+      if (el.dataset.k === 'to' && el.value !== 'bus') { l.bus_no = ''; l.position = ''; }
       drawLines(); drawOdo();
     }));
     document.querySelectorAll('#mv-lines [data-rm]').forEach((el) => el.addEventListener('click', () => { lines.splice(Number(el.dataset.rm), 1); drawLines(); drawOdo(); }));
