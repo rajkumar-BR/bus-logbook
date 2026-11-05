@@ -1124,7 +1124,7 @@ function ttCard(p, title, sat) {
       </div>
       <div class="tt-col"><h4>Evening</h4>
         <div class="field"><label>From</label><input value="School" readonly></div>
-        <div class="field"><label>To (first stop)</label><input value="${esc(p.start_stop)}" readonly title="Same as the morning first stop"></div>
+        <div class="field"><label>To (last drop-off)</label><input class="tt-to" value="${esc(p.end_stop)}" placeholder="Same as the first stop"></div>
         <div class="tt-pair"><div class="field"><label>Pick-up</label><input type="time" class="tt-estart" value="${esc(p.expected_evening_start)}"></div><div class="field"><label>Drop-off</label><input type="time" class="tt-eend" value="${esc(p.expected_evening_end)}"></div></div>
         <div class="field"><label>Planned km</label><input type="number" min="0" step="0.1" class="tt-ekm" value="${esc(p.planned_evening_km)}" placeholder="same as morning"></div>
       </div>
@@ -1167,6 +1167,14 @@ async function viewEditBus(busNo) {
         <div class="error" id="tt-error" hidden></div>
       </div>
     </div>`;
+  // The evening drop-off follows the first stop until it is given a different stop.
+  document.querySelectorAll('#trip-times .tt-card').forEach((card) => {
+    const from = card.querySelector('.tt-from');
+    const to = card.querySelector('.tt-to');
+    let follows = to.value === from.value;
+    from.addEventListener('input', () => { if (follows) to.value = from.value; });
+    to.addEventListener('input', () => { follows = to.value.trim() === '' || to.value === from.value; });
+  });
   $('#tt-save').addEventListener('click', async () => {
     $('#tt-error').hidden = true;
     const button = $('#tt-save');
@@ -1177,7 +1185,7 @@ async function viewEditBus(busNo) {
       for (const row of document.querySelectorAll('#trip-times .tt-card')) {
         // an empty Saturday plan is left alone, so saving the weekday trips does not start one
         if (row.dataset.sat && !['.tt-start', '.tt-end', '.tt-estart', '.tt-eend', '.tt-km', '.tt-ekm'].some((c) => row.querySelector(c).value)) continue;
-        const r = await putJSON(`/api/routes/${encodeURIComponent(row.dataset.route)}/times`, { expected_start: row.querySelector('.tt-start').value, expected_end: row.querySelector('.tt-end').value, expected_evening_start: row.querySelector('.tt-estart').value, expected_evening_end: row.querySelector('.tt-eend').value, planned_km: row.querySelector('.tt-km').value, planned_evening_km: row.querySelector('.tt-ekm').value, start_stop: row.querySelector('.tt-from').value, effective_from: $('#tt-from-date').value, all_days: $('#tt-all').checked, ...(row.dataset.sat ? { day_type: 'Saturday' } : {}) });
+        const r = await putJSON(`/api/routes/${encodeURIComponent(row.dataset.route)}/times`, { expected_start: row.querySelector('.tt-start').value, expected_end: row.querySelector('.tt-end').value, expected_evening_start: row.querySelector('.tt-estart').value, expected_evening_end: row.querySelector('.tt-eend').value, planned_km: row.querySelector('.tt-km').value, planned_evening_km: row.querySelector('.tt-ekm').value, start_stop: row.querySelector('.tt-from').value, end_stop: row.querySelector('.tt-to').value === row.querySelector('.tt-from').value ? '' : row.querySelector('.tt-to').value.trim(), effective_from: $('#tt-from-date').value, all_days: $('#tt-all').checked, ...(row.dataset.sat ? { day_type: 'Saturday' } : {}) });
         changed += r.changed;
         if (r.changed) last = r;
       }
