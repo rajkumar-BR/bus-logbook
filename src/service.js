@@ -618,6 +618,9 @@ export function createService(storage, { readBill = null, today = localToday, us
       const out = new Map();
       for (const trip of d.trips) {
         if (trip.bus_no !== f.bus_no || !f.fitted_date || trip.trip_date < f.fitted_date || trip.trip_date > (f.removed_date || t)) continue;
+        // on the day it was fitted or removed, only trips driven while the tyre was on the bus count
+        if (trip.trip_date === f.fitted_date && f.fitted_km !== '' && f.fitted_km != null && Number(trip.start_odometer_km) < Number(f.fitted_km)) continue;
+        if (f.removed_date && trip.trip_date === f.removed_date && f.removed_km !== '' && f.removed_km != null && Number(trip.end_odometer_km) > Number(f.removed_km)) continue;
         const r = routeOfTrip(d, trip);
         out.set(r, (out.get(r) || 0) + (Number(trip.actual_km) || 0));
       }

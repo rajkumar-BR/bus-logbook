@@ -190,7 +190,7 @@ async function viewDaily(range = '') {
     getLists(true),
   ]);
   main.innerHTML = `
-    ${reportTabs('daily')}<div class="topbar"><div><h1>Daily bus reports</h1><p class="sub">One row per bus per calendar day · inclusive date range, up to 366 days</p></div></div>
+    ${reportTabs('daily')}<div class="topbar"><div><h1>Daily bus reports</h1><p class="sub">One row per bus per calendar day · inclusive date range, up to 366 days · to record a bus day or add an expense, open the bus</p></div></div>
     <form class="report-filter" id="daily-filter"><div class="fgroup"><label for="report-bus">Bus</label><select id="report-bus"><option value="">All buses</option>${lists.buses.map((bus) => `<option value="${esc(bus.bus_no)}" ${bus.bus_no === selectedBus ? 'selected' : ''}>${esc(bus.label)}</option>`).join('')}</select></div><div class="fgroup"><label for="report-from">From</label><input id="report-from" type="date" max="${lists.today}" value="${esc(report.from)}" required></div><div class="fgroup"><label for="report-to">To</label><input id="report-to" type="date" max="${lists.today}" value="${esc(report.to)}" required></div><div class="fgroup"><label for="report-status">Report status</label><select id="report-status">${[['', 'All'], ['On time', 'On time'], ['Late', 'Late'], ['Not reported', 'Not reported']].map(([v, l]) => `<option value="${v}" ${v === statusPart ? 'selected' : ''}>${l}</option>`).join('')}</select></div><div class="fgroup"><label for="report-late">Morning late trips</label><select id="report-late">${[['', 'All'], ['with', 'With late morning trips'], ['none', 'No late morning trips']].map(([v, l]) => `<option value="${v}" ${v === latePart ? 'selected' : ''}>${l}</option>`).join('')}</select></div><div class="fgroup"><label for="report-extra">Extra km</label><select id="report-extra">${[['', 'All'], ['over', 'Over plan'], ['within', 'Within plan']].map(([v, l]) => `<option value="${v}" ${v === extraPart ? 'selected' : ''}>${l}</option>`).join('')}</select></div><button class="btn" type="submit">View report</button></form>
     <div class="strip">
       <div><div class="n">${report.summary.reported_bus_days}/${report.summary.total_bus_days}</div><div class="d">Bus-days reported</div></div>
@@ -222,43 +222,6 @@ async function viewDaily(range = '') {
         <td><button class="btn ghost trip-edit" type="button" data-trip="${esc(trip.trip_id)}">Edit</button></td>
       </tr>`)).join('') || '<tr><td colspan="10" class="hint">No trip legs have been reported for this date range.</td></tr>'}
       </tbody></table></div>
-    </div>
-    <div class="panel report-panel" id="expense-entry">
-      <div class="panel-h"><h2>Add an expense</h2><span class="hint">Fuel, tolls, repairs: adds to that bus's expenses for the day. No trips or photos needed</span></div>
-      <form class="trip-form" id="expense-form">
-        <div class="error full" id="expense-error" hidden></div>
-        <div class="field"><label for="exp-bus">Bus</label><select id="exp-bus" required><option value="">Choose a bus</option>${lists.buses.map((bus) => `<option value="${esc(bus.bus_no)}">${esc(bus.label)}</option>`).join('')}</select></div>
-        <div class="field"><label for="exp-date">Date</label><input id="exp-date" type="date" max="${lists.today}" value="${esc(report.to)}" required></div>
-        <div class="field"><label for="exp-amount">Amount (₹)</label><input id="exp-amount" type="number" min="0" step="0.01" required></div>
-        <div class="field"><label for="exp-mode">What to do</label><select id="exp-mode"><option value="add">Add to the day's expenses</option><option value="replace">Replace the day's total (to correct a mistake)</option></select></div>
-        <div class="field full"><label for="exp-note">What was it for</label><input id="exp-note" placeholder="Diesel, toll, puncture repair…"></div>
-        <div class="btns full"><button class="btn" type="submit" id="exp-save">Save expense</button></div>
-      </form>
-    </div>
-    <div class="panel report-panel" id="trip-entry">
-      <div class="panel-h"><h2>Record a bus day</h2><span class="hint">Enter daily money totals once and each trip's times. Trip images are optional</span></div>
-      <form class="trip-form" id="trip-form">
-        <div class="error full" id="trip-error" hidden></div>
-        <div class="field"><label for="trip-bus">Bus</label><select id="trip-bus" required><option value="">Choose a bus</option>${lists.buses.map((bus) => `<option value="${esc(bus.bus_no)}">${esc(bus.label)}</option>`).join('')}</select></div>
-        <div class="field"><label for="trip-date">Date</label><input id="trip-date" type="date" max="${lists.today}" value="${esc(report.to)}" required></div>
-        <div class="field"><label for="trip-driver">Driver name</label><input id="trip-driver" required></div>
-        <div class="field"><label for="daily-income">Income collected today (₹)</label><input id="daily-income" type="number" min="0" step="0.01" value="0" required></div>
-        <div class="field"><label for="daily-expenses">Expenses today (₹)</label><input id="daily-expenses" type="number" min="0" step="0.01" value="0" required></div>
-        <div class="field full"><label for="daily-notes">Daily notes</label><textarea id="daily-notes" placeholder="Fuel, tolls, delay reasons, or other notes"></textarea></div>
-        ${Array.from({ length: Math.max(1, ...lists.buses.map((bus) => bus.trips)) }, (_, i) => i + 1).flatMap((number) => [['m', 'Morning'], ['e', 'Evening']].map(([k, session]) => { const id = `trip-${number}-${k}`; return `<fieldset class="trip-leg full" data-trip="${number}" data-session="${session}" style="display:none" disabled><legend>Trip ${number} · ${session}</legend><div class="trip-leg-grid">
-          <div class="field"><label for="${id}-origin">From <span class="hint">(from Trip times)</span></label><input id="${id}-origin" placeholder="${session === 'Morning' ? 'First stop' : 'School'}" required></div>
-          <div class="field"><label for="${id}-destination">To <span class="hint">(from Trip times)</span></label><input id="${id}-destination" placeholder="${session === 'Morning' ? 'School' : 'Last stop'}" required></div>
-          <div class="field"><label for="${id}-planned">Planned km <span class="hint">(from Trip times)</span></label><input id="${id}-planned" type="number" min="0.1" step="0.1" required></div>
-          <div class="field"><label for="${id}-start-odo">Start km</label><input id="${id}-start-odo" type="number" min="0" step="0.1" required></div>
-          <div class="field"><label for="${id}-end-odo">End km</label><input id="${id}-end-odo" type="number" min="0" step="0.1" required></div>
-          <div class="field"><label for="${id}-photo">Trip image <span class="hint">(optional)</span></label><input id="${id}-photo" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/heic"></div>
-          <div class="field"><label for="${id}-scheduled-start">Scheduled start <span class="hint">(from Trip times)</span></label><input id="${id}-scheduled-start" type="time" required></div>
-          <div class="field"><label for="${id}-actual-start">Actual start</label><input id="${id}-actual-start" type="time" required></div>
-          <div class="field"><label for="${id}-scheduled-end">Scheduled end <span class="hint">(from Trip times)</span></label><input id="${id}-scheduled-end" type="time" required></div>
-          <div class="field"><label for="${id}-actual-end">Actual end</label><input id="${id}-actual-end" type="time" required></div>
-        </div></fieldset>`; })).join('')}
-        <div class="btns full"><button class="btn" type="submit" id="trip-save">Save daily report</button></div>
-      </form>
     </div>`;
 
   $('#daily-filter').addEventListener('submit', (event) => {
@@ -300,6 +263,106 @@ async function viewDaily(range = '') {
     });
     slot.scrollIntoView({ block: 'nearest' });
   }));
+}
+
+// ---------- Bus history
+
+function lifeChart(chart) {
+  const life = chart.intervals;
+  const avg = chart.fleetMedian;
+  const W = 320, rowH = 34, top = 8, left = 82, right = 52, H = top + life.length * rowH + (avg ? 30 : 8);
+  const max = Math.max(avg || 0, ...life.map((l) => l.km)) * 1.05 || 1;
+  const x = (v) => left + ((W - left - right) * v) / max;
+  let s = `<svg class="chart" viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="${esc(chart.label)}">`;
+  life.forEach((l, i) => {
+    const y = top + i * rowH;
+    s += `<text x="${left - 8}" y="${y + 15}" text-anchor="end">${esc(l.label)}</text>
+      <rect x="${left}" y="${y + 4}" width="${Math.max(4, x(l.km) - left)}" height="16" rx="3" fill="var(--h3)"><title>${esc(l.label)}: ${l.km.toLocaleString('en-IN')} km</title></rect>
+      <text class="val" x="${x(l.km) + 6}" y="${y + 16}">${l.km.toLocaleString('en-IN')}</text>`;
+  });
+  if (avg) {
+    const ax = x(avg), bot = top + life.length * rowH;
+    s += `<line x1="${ax}" x2="${ax}" y1="${top}" y2="${bot}" stroke="var(--ink)" stroke-width="1.5" stroke-dasharray="3 3"/>
+      <text x="${Math.min(ax, W - 4)}" y="${bot + 16}" text-anchor="end">Fleet median ${avg.toLocaleString('en-IN')} km</text>`;
+  }
+  return s + '</svg>';
+}
+
+function eventItem(e) {
+  const k = kindKey(e.kind);
+  const parts = e.parts.length ? `<dt>What changed</dt><dd><ul class="parts">${e.parts.map((p) => `<li>${esc(p.part_name)}${p.position ? ` <span class="hint">(${esc(p.position)})</span>` : ''}
+      ${p.removed_part_no ? `<span class="pn old">${esc(p.removed_part_no)}</span> →` : ''} ${p.fitted_part_no ? `<span class="pn">${esc(p.fitted_part_no)}</span>` : ''}
+      ${p.part_cost !== '' ? `<span class="hint">${inr(p.part_cost)}</span>` : ''}</li>`).join('')}</ul></dd>` : '';
+  const links = [
+    e.bill_url ? `<a href="${esc(e.bill_url)}" target="_blank" rel="noopener">View bill</a>` : '<span class="hint">No bill attached</span>',
+    ...e.photo_urls.map((u, i) => `<a href="${esc(u)}" target="_blank" rel="noopener">Photo ${i + 1}</a>`),
+    ...(['Tyre retread', 'New tyre'].includes(e.kind) ? [] : [`<button type="button" data-go="#correct/${encodeURIComponent(e.entry_id)}">Correct this entry</button>`]),
+    `<button type="button" class="danger" data-void="${esc(e.entry_id)}">Remove entry</button>`,
+  ];
+  return `<li class="ev" data-kind="${k}">
+    <div class="when"><b>${dayMonth(e.date_in)}</b><span>${e.date_in.slice(0, 4)}</span></div>
+    <div class="rail"><span class="dot t-${k}"></span></div>
+    <div class="body">
+      <div class="ev-top"><span class="tag t-${k}">${esc(e.kind)}</span><span class="ev-title">${esc(e.title)}</span>${e.is_repeat ? '<span class="repeat">↻ Repeat</span>' : ''}</div>
+      <dl class="kv">
+        <dt>Why it came in</dt><dd>${esc(e.problem_reported || '—')}</dd>
+        ${parts}
+        <dt>Finding</dt><dd>${esc(e.root_cause || '—')}</dd>
+      </dl>
+      ${e.between ? `<div class="between">Repairs since the previous service${e.between.since ? ` (${fullDate(e.between.since)})` : ''}: <b>${inr(e.between.total)}</b> across ${e.between.jobs} job${e.between.jobs === 1 ? '' : 's'}</div>` : ''}
+      <div class="ev-meta"><span class="mono">${kmText(e.odometer_km)}</span>${e.workshop ? `<span>${esc(e.workshop)}${e.bill_no ? ` · bill ${esc(e.bill_no)}` : ''}</span>` : ''}<span>${inr(e.total_cost)}</span>
+        ${['Tyre retread', 'New tyre'].includes(e.kind) ? '' : `<span>${e.date_out ? `Off road: ${e.days_off_road === 0 ? 'same day' : `${e.days_off_road} day${e.days_off_road === 1 ? '' : 's'}`}` : 'Still in workshop'}</span>`}
+        ${e.route_name ? `<span>Route: ${esc(e.route_name)}</span>` : ''}<span class="mono">${esc(e.entry_id)}</span></div>
+      <div class="ev-links">${links.join('')}</div>
+    </div></li>`;
+}
+
+// Record a bus day and Add an expense live on each bus's own page. The bus is fixed to the page's bus.
+function busEntryPanels(lists, busNo) {
+  return {
+    expense: `
+    <div class="panel report-panel" id="expense-entry">
+      <div class="panel-h"><h2>Add an expense</h2><span class="hint">Fuel, tolls, repairs: adds to that bus's expenses for the day. No trips or photos needed</span></div>
+      <form class="trip-form" id="expense-form">
+        <div class="error full" id="expense-error" hidden></div>
+        <div class="field"><label for="exp-bus">Bus</label><select id="exp-bus" required disabled><option value="${esc(busNo)}" selected>Bus ${esc(busNo)}</option></select></div>
+        <div class="field"><label for="exp-date">Date</label><input id="exp-date" type="date" max="${lists.today}" value="${esc(lists.today)}" required></div>
+        <div class="field"><label for="exp-amount">Amount (₹)</label><input id="exp-amount" type="number" min="0" step="0.01" required></div>
+        <div class="field"><label for="exp-mode">What to do</label><select id="exp-mode"><option value="add">Add to the day's expenses</option><option value="replace">Replace the day's total (to correct a mistake)</option></select></div>
+        <div class="field full"><label for="exp-note">What was it for</label><input id="exp-note" placeholder="Diesel, toll, puncture repair…"></div>
+        <div class="btns full"><button class="btn" type="submit" id="exp-save">Save expense</button></div>
+      </form>
+    </div>`,
+    day: `
+    <div class="panel report-panel" id="trip-entry">
+      <div class="panel-h"><h2>Record a bus day</h2><span class="hint">Enter daily money totals once and each trip's times. Trip images are optional</span></div>
+      <form class="trip-form" id="trip-form">
+        <div class="error full" id="trip-error" hidden></div>
+        <div class="field"><label for="trip-bus">Bus</label><select id="trip-bus" required disabled><option value="${esc(busNo)}" selected>Bus ${esc(busNo)}</option></select></div>
+        <div class="field"><label for="trip-date">Date</label><input id="trip-date" type="date" max="${lists.today}" value="${esc(lists.today)}" required></div>
+        <div class="field"><label for="trip-driver">Driver name</label><input id="trip-driver" required></div>
+        <div class="field"><label for="daily-income">Income collected today (₹)</label><input id="daily-income" type="number" min="0" step="0.01" value="0" required></div>
+        <div class="field"><label for="daily-expenses">Expenses today (₹)</label><input id="daily-expenses" type="number" min="0" step="0.01" value="0" required></div>
+        <div class="field full"><label for="daily-notes">Daily notes</label><textarea id="daily-notes" placeholder="Fuel, tolls, delay reasons, or other notes"></textarea></div>
+        ${Array.from({ length: Math.max(1, ...lists.buses.map((bus) => bus.trips)) }, (_, i) => i + 1).flatMap((number) => [['m', 'Morning'], ['e', 'Evening']].map(([k, session]) => { const id = `trip-${number}-${k}`; return `<fieldset class="trip-leg full" data-trip="${number}" data-session="${session}" style="display:none" disabled><legend>Trip ${number} · ${session}</legend><div class="trip-leg-grid">
+          <div class="field"><label for="${id}-origin">From <span class="hint">(from Trip times)</span></label><input id="${id}-origin" placeholder="${session === 'Morning' ? 'First stop' : 'School'}" required></div>
+          <div class="field"><label for="${id}-destination">To <span class="hint">(from Trip times)</span></label><input id="${id}-destination" placeholder="${session === 'Morning' ? 'School' : 'Last stop'}" required></div>
+          <div class="field"><label for="${id}-planned">Planned km <span class="hint">(from Trip times)</span></label><input id="${id}-planned" type="number" min="0.1" step="0.1" required></div>
+          <div class="field"><label for="${id}-start-odo">Start km</label><input id="${id}-start-odo" type="number" min="0" step="0.1" required></div>
+          <div class="field"><label for="${id}-end-odo">End km</label><input id="${id}-end-odo" type="number" min="0" step="0.1" required></div>
+          <div class="field"><label for="${id}-photo">Trip image <span class="hint">(optional)</span></label><input id="${id}-photo" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/heic"></div>
+          <div class="field"><label for="${id}-scheduled-start">Scheduled start <span class="hint">(from Trip times)</span></label><input id="${id}-scheduled-start" type="time" required></div>
+          <div class="field"><label for="${id}-actual-start">Actual start</label><input id="${id}-actual-start" type="time" required></div>
+          <div class="field"><label for="${id}-scheduled-end">Scheduled end <span class="hint">(from Trip times)</span></label><input id="${id}-scheduled-end" type="time" required></div>
+          <div class="field"><label for="${id}-actual-end">Actual end</label><input id="${id}-actual-end" type="time" required></div>
+        </div></fieldset>`; })).join('')}
+        <div class="btns full"><button class="btn" type="submit" id="trip-save">Save daily report</button></div>
+      </form>
+    </div>`,
+  };
+}
+
+function wireBusEntryForms(lists) {
   $('#expense-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const error = $('#expense-error');
@@ -310,7 +373,7 @@ async function viewDaily(range = '') {
     try {
       const saved = await postJSON('/api/reports/expense', { bus_no: $('#exp-bus').value, report_date: date, amount: $('#exp-amount').value, mode: $('#exp-mode').value, note: $('#exp-note').value });
       toast(`Bus ${saved.bus_no}: expenses for ${date} are now ${inr(saved.expenses)}.`);
-      const target = `#daily/${encodeURIComponent(`${date}~${date}`)}`;
+      const target = `#daily/${encodeURIComponent(`${date}~${date}!${$('#exp-bus').value}`)}`;
       if (location.hash === target) router(); else location.hash = target;
     } catch (err) {
       error.textContent = err.message;
@@ -403,7 +466,7 @@ async function viewDaily(range = '') {
     try {
       const saved = await api('/api/reports/daily', { method: 'POST', body: data });
       toast(`Saved daily report for Bus ${saved.bus_no}.`);
-      location.hash = `#daily/${encodeURIComponent(`${report.report_date}~${report.report_date}`)}`;
+      location.hash = `#daily/${encodeURIComponent(`${report.report_date}~${report.report_date}!${report.bus_no}`)}`;
     } catch (err) {
       error.textContent = err.message;
       error.hidden = false;
@@ -411,62 +474,12 @@ async function viewDaily(range = '') {
       button.textContent = 'Save daily report';
     }
   });
-}
-
-// ---------- Bus history
-
-function lifeChart(chart) {
-  const life = chart.intervals;
-  const avg = chart.fleetMedian;
-  const W = 320, rowH = 34, top = 8, left = 82, right = 52, H = top + life.length * rowH + (avg ? 30 : 8);
-  const max = Math.max(avg || 0, ...life.map((l) => l.km)) * 1.05 || 1;
-  const x = (v) => left + ((W - left - right) * v) / max;
-  let s = `<svg class="chart" viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="${esc(chart.label)}">`;
-  life.forEach((l, i) => {
-    const y = top + i * rowH;
-    s += `<text x="${left - 8}" y="${y + 15}" text-anchor="end">${esc(l.label)}</text>
-      <rect x="${left}" y="${y + 4}" width="${Math.max(4, x(l.km) - left)}" height="16" rx="3" fill="var(--h3)"><title>${esc(l.label)}: ${l.km.toLocaleString('en-IN')} km</title></rect>
-      <text class="val" x="${x(l.km) + 6}" y="${y + 16}">${l.km.toLocaleString('en-IN')}</text>`;
-  });
-  if (avg) {
-    const ax = x(avg), bot = top + life.length * rowH;
-    s += `<line x1="${ax}" x2="${ax}" y1="${top}" y2="${bot}" stroke="var(--ink)" stroke-width="1.5" stroke-dasharray="3 3"/>
-      <text x="${Math.min(ax, W - 4)}" y="${bot + 16}" text-anchor="end">Fleet median ${avg.toLocaleString('en-IN')} km</text>`;
-  }
-  return s + '</svg>';
-}
-
-function eventItem(e) {
-  const k = kindKey(e.kind);
-  const parts = e.parts.length ? `<dt>What changed</dt><dd><ul class="parts">${e.parts.map((p) => `<li>${esc(p.part_name)}${p.position ? ` <span class="hint">(${esc(p.position)})</span>` : ''}
-      ${p.removed_part_no ? `<span class="pn old">${esc(p.removed_part_no)}</span> →` : ''} ${p.fitted_part_no ? `<span class="pn">${esc(p.fitted_part_no)}</span>` : ''}
-      ${p.part_cost !== '' ? `<span class="hint">${inr(p.part_cost)}</span>` : ''}</li>`).join('')}</ul></dd>` : '';
-  const links = [
-    e.bill_url ? `<a href="${esc(e.bill_url)}" target="_blank" rel="noopener">View bill</a>` : '<span class="hint">No bill attached</span>',
-    ...e.photo_urls.map((u, i) => `<a href="${esc(u)}" target="_blank" rel="noopener">Photo ${i + 1}</a>`),
-    ...(['Tyre retread', 'New tyre'].includes(e.kind) ? [] : [`<button type="button" data-go="#correct/${encodeURIComponent(e.entry_id)}">Correct this entry</button>`]),
-    `<button type="button" class="danger" data-void="${esc(e.entry_id)}">Remove entry</button>`,
-  ];
-  return `<li class="ev" data-kind="${k}">
-    <div class="when"><b>${dayMonth(e.date_in)}</b><span>${e.date_in.slice(0, 4)}</span></div>
-    <div class="rail"><span class="dot t-${k}"></span></div>
-    <div class="body">
-      <div class="ev-top"><span class="tag t-${k}">${esc(e.kind)}</span><span class="ev-title">${esc(e.title)}</span>${e.is_repeat ? '<span class="repeat">↻ Repeat</span>' : ''}</div>
-      <dl class="kv">
-        <dt>Why it came in</dt><dd>${esc(e.problem_reported || '—')}</dd>
-        ${parts}
-        <dt>Finding</dt><dd>${esc(e.root_cause || '—')}</dd>
-      </dl>
-      ${e.between ? `<div class="between">Repairs since the previous service${e.between.since ? ` (${fullDate(e.between.since)})` : ''}: <b>${inr(e.between.total)}</b> across ${e.between.jobs} job${e.between.jobs === 1 ? '' : 's'}</div>` : ''}
-      <div class="ev-meta"><span class="mono">${kmText(e.odometer_km)}</span>${e.workshop ? `<span>${esc(e.workshop)}${e.bill_no ? ` · bill ${esc(e.bill_no)}` : ''}</span>` : ''}<span>${inr(e.total_cost)}</span>
-        ${['Tyre retread', 'New tyre'].includes(e.kind) ? '' : `<span>${e.date_out ? `Off road: ${e.days_off_road === 0 ? 'same day' : `${e.days_off_road} day${e.days_off_road === 1 ? '' : 's'}`}` : 'Still in workshop'}</span>`}
-        ${e.route_name ? `<span>Route: ${esc(e.route_name)}</span>` : ''}<span class="mono">${esc(e.entry_id)}</span></div>
-      <div class="ev-links">${links.join('')}</div>
-    </div></li>`;
+  refreshPlans();
 }
 
 async function viewBus(busNo) {
-  const d = await api(`/api/buses/${encodeURIComponent(busNo)}`);
+  const [d, lists] = await Promise.all([api(`/api/buses/${encodeURIComponent(busNo)}`), getLists(true)]);
+  const panels = busEntryPanels(lists, busNo);
   const b = d.bus, f = d.facts;
   const facts = [
     ['Odometer', kmText(f.odometer)],
@@ -499,6 +512,10 @@ async function viewBus(busNo) {
         <div style="margin-top:6px">${pill(b.status)}${b.active === false ? ' <span class="hint">Retired: not shown in the fleet</span>' : ''}</div></div>
       <div class="head-actions"><a class="btn" href="#new/${encodeURIComponent(b.bus_no)}">Enter a repair bill for this bus</a> <a class="btn ghost" href="#editbus/${encodeURIComponent(b.bus_no)}">Edit bus</a></div>
     </div>
+    <nav class="rtabs" id="bus-tabs" aria-label="Bus sections"><a href="#bus/${encodeURIComponent(b.bus_no)}" data-tab="history" aria-current="page">Service history</a><a href="#bus/${encodeURIComponent(b.bus_no)}" data-tab="day">Record a bus day</a><a href="#bus/${encodeURIComponent(b.bus_no)}" data-tab="expense">Add an expense</a></nav>
+    <div id="tab-day" hidden>${panels.day}</div>
+    <div id="tab-expense" hidden>${panels.expense}</div>
+    <div id="tab-history">
     <div class="facts">${facts.map(([k, v]) => `<div><div class="label">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join('')}</div>
     ${d.tyreHistory.length ? `<div class="panel report-panel"><div class="panel-h"><h2>Tyre replacement history</h2><span class="hint">Distance from each recorded fitment to its next recorded replacement</span></div><div class="tbl-wrap"><table><thead><tr><th>Tyre / position</th><th>Changed on</th><th>Odometer at change</th><th>Km survived</th><th>Replaced on</th></tr></thead><tbody>${d.tyreHistory.map((tyre) => `<tr><td>${esc(tyre.part_name)}${tyre.position ? `<div class="hint">${esc(tyre.position)}</div>` : ''}</td><td>${fullDate(tyre.date)}</td><td class="mono">${kmText(tyre.odometer_km)}</td><td class="mono">${tyre.km_survived === null ? '<span class="hint">Awaiting next recorded change</span>' : kmText(tyre.km_survived)}</td><td>${fullDate(tyre.replaced_on)}</td></tr>`).join('')}</tbody></table></div></div>` : ''}
     <div class="detail">
@@ -515,7 +532,15 @@ async function viewBus(busNo) {
         <div class="panel"><div class="panel-h"><h2>Spending between services</h2></div><div class="spend">${spendHTML}</div></div>
         <div class="panel"><div class="panel-h"><h2>Why does it keep coming back?</h2></div><div class="why">${whyHTML}</div></div>
       </div>
+    </div>
     </div>`;
+  // the tabs switch what is shown on this page; the forms are wired once
+  wireBusEntryForms(lists);
+  $$('#bus-tabs a').forEach((a) => a.addEventListener('click', (ev) => {
+    ev.preventDefault();
+    $$('#bus-tabs a').forEach((x) => (x === a ? x.setAttribute('aria-current', 'page') : x.removeAttribute('aria-current')));
+    for (const t of ['history', 'day', 'expense']) $(`#tab-${t}`).hidden = a.dataset.tab !== t;
+  }));
   const filters = $('#ev-filters');
   filters.addEventListener('click', (e) => {
     const btn = e.target.closest('.fbtn');
