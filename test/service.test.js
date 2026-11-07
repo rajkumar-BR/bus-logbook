@@ -548,3 +548,15 @@ test('a tyre cost can be corrected or added later and the bus history and daily 
   // both tyre lines are listed in the bus's current spending
   assert.equal(bus.spending.current.jobs.length, 2);
 });
+
+test('a tyre carried as the stepney adds no km until it is moved onto a wheel', async () => {
+  const storage = memoryStorage({ Buses: [{ bus_no: '01', active: true }] });
+  const service = createService(storage, { today: () => '2026-10-23', user: 'test' });
+  await service.addTyres({ tyre_nos: '', fitted: { bus_no: '01', date: '2026-10-01', odometer: 1000, positions: { 'Front left': 'A', Stepney: 'S' } } });
+  await service.moveTyres({ date: '2026-10-10', odometers: { '01': 1500 }, moves: [{ tyre_no: 'A', to: 'In repair' }, { tyre_no: 'S', to: 'bus', bus_no: '01', position: 'Front left' }] });
+  const { positions, tyres } = await service.getTyres();
+  assert.ok(positions.includes('Stepney'));
+  const s = tyres.find((x) => x.tyre_no === 'S');
+  assert.deepEqual(s.spells.map((x) => [x.position, x.km]), [['Stepney', 0], ['Front left', 0]]);
+  assert.equal(tyres.find((x) => x.tyre_no === 'A').spells[0].km, 500);
+});

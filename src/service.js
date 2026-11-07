@@ -602,7 +602,9 @@ export function createService(storage, { readBill = null, today = localToday, us
   // Spares are not per bus: unfitted tyres sit in the common "In stock" pool.
   // A tyre stays on its bus (it may change wheel position there) until it goes to repair, the retreader or scrap.
   // A retreaded tyre keeps its serial number and may be fitted to any bus when it comes back.
-  const TYRE_POSITIONS = ['Front left', 'Front right', 'Back left outer', 'Back left inner', 'Back right outer', 'Back right inner'];
+  const TYRE_POSITIONS = ['Front left', 'Front right', 'Back left outer', 'Back left inner', 'Back right outer', 'Back right inner', 'Stepney'];
+  // the stepney is carried on the bus but does not run, so time spent as stepney adds no km
+  const STEPNEY = 'Stepney';
   const TYRE_PLACES = ['In stock', 'In repair', 'At retreader', 'Scrapped'];
   const routeOfTrip = (d, trip) => {
     const on = d.assignments.filter((a) => a.bus_no === trip.bus_no && a.from_date && a.from_date <= trip.trip_date && (!a.to_date || a.to_date >= trip.trip_date));
@@ -615,6 +617,7 @@ export function createService(storage, { readBill = null, today = localToday, us
     const [tyres, fitments, retreads] = await Promise.all([storage.read('Tyres'), storage.read('Tyre fitments'), storage.read('Tyre retreads')]);
     const t = today();
     const kmByRoute = (f) => {
+      if (f.position === STEPNEY) return new Map();
       const out = new Map();
       for (const trip of d.trips) {
         if (trip.bus_no !== f.bus_no || !f.fitted_date || trip.trip_date < f.fitted_date || trip.trip_date > (f.removed_date || t)) continue;
@@ -631,11 +634,12 @@ export function createService(storage, { readBill = null, today = localToday, us
         .map((f) => {
           const routes = kmByRoute(f);
           const open = !f.removed_date;
-          const odoKm = !open && Number.isFinite(Number(f.removed_km)) && f.removed_km !== '' && f.removed_km !== null ? Number(f.removed_km) - Number(f.fitted_km) : null;
+          const stepney = f.position === STEPNEY;
+          const odoKm = stepney ? 0 : !open && Number.isFinite(Number(f.removed_km)) && f.removed_km !== '' && f.removed_km !== null ? Number(f.removed_km) - Number(f.fitted_km) : null;
           const logged = [...routes.values()].reduce((a, b) => a + b, 0);
           // a stretch still running is measured to the bus's last logged odometer reading, like a finished one is measured to the odometer at removal
           const lastOdo = open ? Math.max(0, ...d.trips.filter((x) => x.bus_no === f.bus_no && f.fitted_date && x.trip_date >= f.fitted_date).map((x) => Number(x.end_odometer_km) || 0)) : 0;
-          const openKm = open && lastOdo > Number(f.fitted_km) ? lastOdo - Number(f.fitted_km) : null;
+          const openKm = stepney ? 0 : open && lastOdo > Number(f.fitted_km) ? lastOdo - Number(f.fitted_km) : null;
           return {
             fitment_id: f.fitment_id, bus_no: f.bus_no, position: f.position, fitted_date: f.fitted_date, fitted_km: f.fitted_km,
             removed_date: f.removed_date || '', removed_km: f.removed_km ?? '', removed_to: f.removed_to || '',
