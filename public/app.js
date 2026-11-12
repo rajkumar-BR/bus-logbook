@@ -206,7 +206,7 @@ async function viewDaily(range = '') {
       <tbody>${report.buses.map((bus) => `<tr>
         <td>${fullDate(bus.report_date)}</td><td><button class="text-link" data-go="#bus/${encodeURIComponent(bus.bus_no)}">Bus ${esc(bus.bus_no)}</button><div class="hint">${esc(bus.driver_name || 'Driver not recorded')}</div></td>
         <td><span class="report-status ${bus.status === 'On time' ? 'ontime' : bus.status === 'Late' ? 'late' : 'missing'}">${esc(bus.status)}</span></td>
-        <td class="mono">${inr(bus.income_collected)}</td><td class="mono">${inr(bus.expenses)}${Object.entries(bus.category_expenses || {}).map(([k, v]) => `<div class="hint">${esc(k)} ${inr(v)}</div>`).join('')}${bus.bill_expenses ? `<div class="hint">Bills ${inr(bus.bill_expenses)}</div>` : ''}</td><td class="mono">${inr(bus.net_collection)}</td>
+        <td class="mono">${inr(bus.income_collected)}</td><td class="mono">${inr(bus.expenses)}${Object.entries(bus.category_expenses || {}).map(([k, v]) => `<div class="hint">${esc(k)} ${inr(v)}</div>`).join('')}</td><td class="mono">${inr(bus.net_collection)}</td>
         <td>${bus.trip_count}/${bus.trips_expected}</td><td>${bus.late_trips}</td><td class="mono">${kmText(bus.extra_km)}</td>
       </tr>`).join('')}</tbody></table></div>
     </div>

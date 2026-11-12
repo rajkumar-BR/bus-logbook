@@ -24,6 +24,10 @@ export function createService(storage, { readBill = null, today = localToday, us
       t[tab] = await storage.read(tab);
     }
     const lists = { ...DEFAULT_LISTS, ...L.listsFrom(t.Lists) };
+    // management's expense categories can also be chosen on a bill, whatever the Lists table says
+    const base = lists.systems.filter((x) => !EXPENSE_CATEGORIES.includes(x));
+    const other = base.indexOf('Other');
+    lists.systems = other < 0 ? [...base, ...EXPENSE_CATEGORIES] : [...base.slice(0, other), ...EXPENSE_CATEGORIES, ...base.slice(other)];
     return {
       buses: t.Buses.filter((b) => b.bus_no),
       routes: t.Routes,
@@ -280,6 +284,7 @@ export function createService(storage, { readBill = null, today = localToday, us
     return { systems, matrix, patterns, today: t };
   }
 
+  const BILLS = 'Repair & tyre bills';
   async function getDailyReport(startDate = today(), endDate = startDate, busNo = '', filters = {}) {
     const from = String(startDate || today());
     const to = String(endDate || from);
@@ -322,7 +327,10 @@ export function createService(storage, { readBill = null, today = localToday, us
           };
         });
         // Everything spent on the bus that day: what was typed in the daily report, plus the bills entered for that day (repairs, services, tyres)
-        const billExpenses = d.entries.filter((e) => e.bus_no === bus.bus_no && e.date_in === reportDate).reduce((a, e) => a + (Number(e.total_cost) || 0), 0);
+        const dayBills = d.entries.filter((e) => e.bus_no === bus.bus_no && e.date_in === reportDate);
+        const billExpenses = dayBills.reduce((a, e) => a + (Number(e.total_cost) || 0), 0);
+        const billByCategory = {};
+        for (const e of dayBills) { const k = EXPENSE_CATEGORIES.includes(e.system) ? e.system : BILLS; billByCategory[k] = (billByCategory[k] || 0) + (Number(e.total_cost) || 0); }
         const typedExpenses = Number(daily?.expenses) || 0;
         const categoryExpenses = {};
         for (const x of d.expenseItems.filter((x) => x.bus_no === bus.bus_no && x.expense_date === reportDate)) categoryExpenses[x.category] = (categoryExpenses[x.category] || 0) + (Number(x.amount) || 0);
@@ -341,7 +349,7 @@ export function createService(storage, { readBill = null, today = localToday, us
           income_collected: Number(daily?.income_collected) || 0,
           expenses: typedExpenses + itemExpenses + billExpenses,
           bill_expenses: billExpenses,
-          category_expenses: { ...(typedExpenses ? { [DAILY_EXPENSE]: typedExpenses } : {}), ...categoryExpenses },
+          category_expenses: Object.entries({ ...(typedExpenses ? { [DAILY_EXPENSE]: typedExpenses } : {}), ...categoryExpenses }).concat(Object.entries(billByCategory).filter(([, v]) => v)).reduce((acc, [k, v]) => ({ ...acc, [k]: (acc[k] || 0) + v }), {}),
           net_collection: (Number(daily?.income_collected) || 0) - typedExpenses - itemExpenses - billExpenses,
           extra_km: busTrips.reduce((sum, trip) => sum + Math.max(0, Number(trip.extra_km) || 0), 0),
           trips: busTrips,
@@ -370,7 +378,7 @@ export function createService(storage, { readBill = null, today = localToday, us
         extra_km: rows.reduce((sum, row) => sum + row.extra_km, 0),
         income_collected: rows.reduce((sum, row) => sum + row.income_collected, 0),
         expenses: rows.reduce((sum, row) => sum + row.expenses, 0),
-        by_category: rows.reduce((acc, row) => { for (const [k, v] of Object.entries(row.category_expenses)) acc[k] = (acc[k] || 0) + v; if (row.bill_expenses) acc['Repair & tyre bills'] = (acc['Repair & tyre bills'] || 0) + row.bill_expenses; return acc; }, {}),
+        by_category: rows.reduce((acc, row) => { for (const [k, v] of Object.entries(row.category_expenses)) acc[k] = (acc[k] || 0) + v; return acc; }, {}),
         net_collection: rows.reduce((sum, row) => sum + row.net_collection, 0),
       },
     };

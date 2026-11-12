@@ -579,3 +579,16 @@ test('categorised expenses add to the day, show by category, and can be replaced
   await assert.rejects(service.saveExpense({ bus_no: '01', report_date: '2026-10-20', amount: 1, category: 'Lunch' }), /category/);
   assert.ok((await service.getLists()).expense_categories.includes('Broker expense'));
 });
+
+test('management categories can be chosen on a bill and are reported by category', async () => {
+  const storage = memoryStorage({ Buses: [{ bus_no: '01', driver_name: 'D', active: true }], Lists: [{ systems: 'Brakes' }, { systems: 'Other' }] });
+  const service = createService(storage, { today: () => '2026-10-23', user: 'test' });
+  const systems = (await service.getLists()).systems;
+  assert.deepEqual(systems, ['Brakes', 'Body Work', 'Under Chase', 'Electrical Charges', 'Seat', 'Insurance', 'F.C - expense', 'Tax', 'Broker expense', 'Other']);
+  await service.saveEntry({ bus_no: '01', kind: 'Repair', system: 'Body Work', problem_reported: 'Dent', root_cause: 'Panel beaten', date_in: '2026-10-20', date_out: '2026-10-20', total_cost: 4000 });
+  await service.saveEntry({ bus_no: '01', kind: 'Repair', system: 'Brakes', problem_reported: 'Noise', root_cause: 'Pads', date_in: '2026-10-20', date_out: '2026-10-20', total_cost: 1000 });
+  await service.saveExpense({ bus_no: '01', report_date: '2026-10-20', amount: 500, category: 'Body Work' });
+  const r = await service.getDailyReport('2026-10-20', '2026-10-20', '01');
+  assert.deepEqual(r.summary.by_category, { 'Body Work': 4500, 'Repair & tyre bills': 1000 });
+  assert.equal(r.summary.expenses, 5500);
+});
