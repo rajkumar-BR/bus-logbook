@@ -5,7 +5,7 @@ import { createService } from '../src/service.js';
 function memoryStorage(initial = {}) {
   const tables = Object.fromEntries([
     'Buses', 'Routes', 'Route assignments', 'Daily reports', 'Trips', 'Entries', 'Parts changed',
-    'Workshops', 'Lists', 'Settings', 'Bus documents', 'Change log', 'Tyres', 'Tyre fitments', 'Tyre retreads', 'Trip settings',
+    'Workshops', 'Lists', 'Settings', 'Bus documents', 'Change log', 'Tyres', 'Tyre fitments', 'Tyre retreads', 'Trip settings', 'Expense items',
   ].map((tab) => [tab, initial[tab] || []]));
   return {
     tables,
@@ -559,4 +559,23 @@ test('a tyre carried as the stepney adds no km until it is moved onto a wheel', 
   const s = tyres.find((x) => x.tyre_no === 'S');
   assert.deepEqual(s.spells.map((x) => [x.position, x.km]), [['Stepney', 0], ['Front left', 0]]);
   assert.equal(tyres.find((x) => x.tyre_no === 'A').spells[0].km, 500);
+});
+
+test('categorised expenses add to the day, show by category, and can be replaced', async () => {
+  const storage = memoryStorage({ Buses: [{ bus_no: '01', driver_name: 'D', active: true }] });
+  const service = createService(storage, { today: () => '2026-10-23', user: 'test' });
+  const day = async () => (await service.getDailyReport('2026-10-20', '2026-10-20', '01'));
+  await service.saveExpense({ bus_no: '01', report_date: '2026-10-20', amount: 700 });
+  await service.saveExpense({ bus_no: '01', report_date: '2026-10-20', amount: 3000, category: 'Insurance' });
+  await service.saveExpense({ bus_no: '01', report_date: '2026-10-20', amount: 500, category: 'Insurance' });
+  await service.saveExpense({ bus_no: '01', report_date: '2026-10-20', amount: 200, category: 'Tax' });
+  let r = await day();
+  assert.equal(r.buses[0].expenses, 4400);
+  assert.deepEqual(r.summary.by_category, { 'Daily running': 700, Insurance: 3500, Tax: 200 });
+  assert.equal(r.buses[0].net_collection, -4400);
+  await service.saveExpense({ bus_no: '01', report_date: '2026-10-20', amount: 3200, category: 'Insurance', mode: 'replace' });
+  r = await day();
+  assert.deepEqual(r.summary.by_category, { 'Daily running': 700, Insurance: 3200, Tax: 200 });
+  await assert.rejects(service.saveExpense({ bus_no: '01', report_date: '2026-10-20', amount: 1, category: 'Lunch' }), /category/);
+  assert.ok((await service.getLists()).expense_categories.includes('Broker expense'));
 });

@@ -66,6 +66,10 @@ export const TABS = {
     ['school_id', 'text'], ['retread_id', 'text'], ['tyre_no', 'text'], ['returned_date', 'date'], ['company', 'text'],
     ['cost', 'number'], ['bus_no', 'text'], ['notes', 'text'], ['bill_link', 'text'],
   ],
+  'Expense items': [
+    ['school_id', 'text'], ['expense_id', 'text'], ['bus_no', 'text'], ['expense_date', 'date'], ['category', 'text'],
+    ['amount', 'number'], ['note', 'text'], ['record_status', 'text'], ['entered_by', 'text'], ['entered_at', 'datetime'],
+  ],
   'Trip settings': [
     ['school_id', 'text'], ['route_id', 'text'], ['effective_from', 'date'], ['start_stop', 'text'], ['end_stop', 'text'],
     ['expected_start', 'text'], ['expected_end', 'text'], ['expected_evening_start', 'text'], ['expected_evening_end', 'text'],
@@ -99,6 +103,10 @@ export const KINDS = {
   SERVICE: 'Scheduled service',
   INSPECTION: 'Inspection',
 };
+
+// Categories management reads expenses by. "Daily running" is the plain per-day total (diesel, toll...) kept in the daily report.
+export const EXPENSE_CATEGORIES = ['Body Work', 'Under Chase', 'Electrical Charges', 'Seat', 'Insurance', 'F.C - expense', 'Tax', 'Broker expense'];
+export const DAILY_EXPENSE = 'Daily running';
 
 export const STATUS = {
   ON_ROUTE: 'On route',

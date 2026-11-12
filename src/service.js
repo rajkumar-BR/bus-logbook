@@ -3,7 +3,7 @@
 
 import os from 'node:os';
 import path from 'node:path';
-import { KINDS, STATUS, DEFAULT_LISTS } from './schema.js';
+import { KINDS, STATUS, DEFAULT_LISTS, EXPENSE_CATEGORIES, DAILY_EXPENSE } from './schema.js';
 import * as L from './logic.js';
 import * as I from './importer.js';
 import { UserError } from './ai.js';
@@ -20,7 +20,7 @@ function localNow() {
 export function createService(storage, { readBill = null, today = localToday, user = process.env.OFFICE_USER || os.userInfo().username } = {}) {
   async function load() {
     const t = {};
-    for (const tab of ['Buses', 'Routes', 'Route assignments', 'Daily reports', 'Trips', 'Entries', 'Parts changed', 'Workshops', 'Lists', 'Settings', 'Bus documents', 'Trip settings']) {
+    for (const tab of ['Buses', 'Routes', 'Route assignments', 'Daily reports', 'Trips', 'Entries', 'Parts changed', 'Workshops', 'Lists', 'Settings', 'Bus documents', 'Trip settings', 'Expense items']) {
       t[tab] = await storage.read(tab);
     }
     const lists = { ...DEFAULT_LISTS, ...L.listsFrom(t.Lists) };
@@ -31,6 +31,7 @@ export function createService(storage, { readBill = null, today = localToday, us
       dailyReports: t['Daily reports'].filter((report) => report.report_id && L.isActive(report)),
       trips: t.Trips.filter((trip) => trip.trip_id && L.isActive(trip)),
       entries: t.Entries.filter((e) => e.entry_id && L.isActive(e)),
+      expenseItems: t['Expense items'].filter((x) => x.expense_id && x.record_status !== 'Removed'),
       voided: t.Entries.filter((e) => e.entry_id && e.record_status === 'Voided'),
       parts: t['Parts changed'].filter(L.isActive),
       workshops: t.Workshops.map((w) => w.workshop_name).filter(Boolean),
@@ -137,6 +138,7 @@ export function createService(storage, { readBill = null, today = localToday, us
     return {
       ...d.lists,
       workshops: d.workshops,
+      expense_categories: [DAILY_EXPENSE, ...EXPENSE_CATEGORIES],
       buses: activeBuses(d).map((b) => ({ bus_no: b.bus_no, label: busLabel(d, b), trips: tripsPerDay(d, b.bus_no), plans: tripPlans(d, b.bus_no) })),
       aiEnabled: Boolean(readBill) && String(d.settings.ai_enabled ?? 'TRUE').toUpperCase() !== 'FALSE',
       today: today(),
@@ -294,7 +296,7 @@ export function createService(storage, { readBill = null, today = localToday, us
     // Buses do not run on Sundays, so those days are not listed (unless something was reported or billed on one).
     const isSunday = (date) => new Date(`${date}T00:00:00`).getDay() === 0;
     const days = Array.from({ length: dayCount }, (_, index) => L.addDays(from, index))
-      .filter((date) => !isSunday(date) || d.dailyReports.some((r) => r.report_date === date) || d.trips.some((t) => t.trip_date === date) || d.entries.some((e) => e.date_in === date && Number(e.total_cost) > 0));
+      .filter((date) => !isSunday(date) || d.dailyReports.some((r) => r.report_date === date) || d.trips.some((t) => t.trip_date === date) || d.entries.some((e) => e.date_in === date && Number(e.total_cost) > 0) || d.expenseItems.some((x) => x.expense_date === date));
     const allRows = days.flatMap((reportDate) => {
       const reports = d.dailyReports.filter((report) => report.report_date === reportDate);
       const trips = d.trips.filter((trip) => trip.trip_date === reportDate).sort((a, b) => (Number(a.trip_number) - Number(b.trip_number)) || (SESSIONS.indexOf(sessionOf(a)) - SESSIONS.indexOf(sessionOf(b))) || String(a.actual_start).localeCompare(String(b.actual_start)));
@@ -322,6 +324,9 @@ export function createService(storage, { readBill = null, today = localToday, us
         // Everything spent on the bus that day: what was typed in the daily report, plus the bills entered for that day (repairs, services, tyres)
         const billExpenses = d.entries.filter((e) => e.bus_no === bus.bus_no && e.date_in === reportDate).reduce((a, e) => a + (Number(e.total_cost) || 0), 0);
         const typedExpenses = Number(daily?.expenses) || 0;
+        const categoryExpenses = {};
+        for (const x of d.expenseItems.filter((x) => x.bus_no === bus.bus_no && x.expense_date === reportDate)) categoryExpenses[x.category] = (categoryExpenses[x.category] || 0) + (Number(x.amount) || 0);
+        const itemExpenses = Object.values(categoryExpenses).reduce((a, b) => a + b, 0);
         const reported = Boolean(daily);
         const lateTrips = busTrips.filter((trip) => !trip.on_time).length;
         return {
@@ -334,9 +339,10 @@ export function createService(storage, { readBill = null, today = localToday, us
           trips_expected: Math.max(1, plans.length),
           late_trips: lateTrips,
           income_collected: Number(daily?.income_collected) || 0,
-          expenses: typedExpenses + billExpenses,
+          expenses: typedExpenses + itemExpenses + billExpenses,
           bill_expenses: billExpenses,
-          net_collection: (Number(daily?.income_collected) || 0) - typedExpenses - billExpenses,
+          category_expenses: { ...(typedExpenses ? { [DAILY_EXPENSE]: typedExpenses } : {}), ...categoryExpenses },
+          net_collection: (Number(daily?.income_collected) || 0) - typedExpenses - itemExpenses - billExpenses,
           extra_km: busTrips.reduce((sum, trip) => sum + Math.max(0, Number(trip.extra_km) || 0), 0),
           trips: busTrips,
         };
@@ -364,6 +370,7 @@ export function createService(storage, { readBill = null, today = localToday, us
         extra_km: rows.reduce((sum, row) => sum + row.extra_km, 0),
         income_collected: rows.reduce((sum, row) => sum + row.income_collected, 0),
         expenses: rows.reduce((sum, row) => sum + row.expenses, 0),
+        by_category: rows.reduce((acc, row) => { for (const [k, v] of Object.entries(row.category_expenses)) acc[k] = (acc[k] || 0) + v; if (row.bill_expenses) acc['Repair & tyre bills'] = (acc['Repair & tyre bills'] || 0) + row.bill_expenses; return acc; }, {}),
         net_collection: rows.reduce((sum, row) => sum + row.net_collection, 0),
       },
     };
@@ -469,6 +476,8 @@ export function createService(storage, { readBill = null, today = localToday, us
     const amount = Number(input.amount);
     const replace = input.mode === 'replace';
     const note = String(input.note || '').trim();
+    const category = String(input.category || '').trim() || DAILY_EXPENSE;
+    if (category !== DAILY_EXPENSE && !EXPENSE_CATEGORIES.includes(category)) throw new UserError('Choose an expense category from the list.');
     const validDate = /^\d{4}-\d{2}-\d{2}$/.test(report_date) && !Number.isNaN(Date.parse(`${report_date}T00:00:00`));
     if (!validDate || report_date > today()) throw new UserError('Choose a valid date that is not in the future.');
     const d = await load();
@@ -476,6 +485,18 @@ export function createService(storage, { readBill = null, today = localToday, us
     if (!bus) throw new UserError('Choose an active bus.');
     if (!Number.isFinite(amount) || amount < 0 || (!replace && amount === 0)) throw new UserError('Enter the expense amount in rupees.');
     const now = localNow();
+    if (category !== DAILY_EXPENSE) {
+      return storage.transact((tx) => {
+        const same = (x) => x.bus_no === bus_no && x.expense_date === report_date && x.category === category && x.record_status !== 'Removed';
+        const before = tx.read('Expense items').filter(same).reduce((a, x) => a + (Number(x.amount) || 0), 0);
+        if (replace) tx.update('Expense items', same, { record_status: 'Removed' });
+        const expense_id = `X-${report_date}-${bus_no}-${String(tx.read('Expense items').length + 1).padStart(4, '0')}`;
+        if (amount > 0) tx.append('Expense items', [{ expense_id, bus_no, expense_date: report_date, category, amount, note, record_status: 'Active', entered_by: user, entered_at: now }]);
+        const after = replace ? amount : before + amount;
+        tx.append('Change log', [{ timestamp: now, user, action: replace ? 'Changed' : 'Added', tab: 'Expense items', record_id: expense_id, field: category, old_value: String(before), new_value: String(after) }]);
+        return { bus_no, report_date, category, expenses: after, created: true };
+      });
+    }
     return storage.transact((tx) => {
       const existing = tx.read('Daily reports').find((r) => r.report_date === report_date && r.bus_no === bus_no);
       const log = (record_id, action, old_value, new_value) => tx.append('Change log', [{ timestamp: now, user, action, tab: 'Daily reports', record_id, field: 'expenses', old_value, new_value }]);

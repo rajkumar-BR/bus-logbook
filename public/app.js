@@ -199,13 +199,14 @@ async function viewDaily(range = '') {
       <div><div class="n">${inr(report.summary.income_collected)}</div><div class="d">Income collected</div></div>
       <div><div class="n">${inr(report.summary.expenses)}</div><div class="d">Expenses, bills included</div></div>
     </div>
+    ${Object.keys(report.summary.by_category || {}).length ? `<div class="panel report-panel"><div class="panel-h"><h2>Expenses by category</h2><span class="hint">For the buses and dates chosen above</span></div><div class="tbl-wrap"><table><thead><tr><th>Category</th><th>Amount</th></tr></thead><tbody>${Object.entries(report.summary.by_category).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="mono">${inr(v)}</td></tr>`).join('')}<tr><td><b>Total</b></td><td class="mono"><b>${inr(report.summary.expenses)}</b></td></tr></tbody></table></div></div>` : ''}
     <div class="panel report-panel">
       <div class="panel-h"><h2>${selectedBus ? `Bus ${esc(selectedBus)} daily totals` : 'Daily totals by bus'} · ${fullDate(report.from)} to ${fullDate(report.to)}</h2><span class="hint">Net = income collected − expenses · missing reports include holidays; Sundays are not listed</span></div>
       <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Bus / driver</th><th>Report status</th><th>Income</th><th>Expenses</th><th>Net</th><th>Trips logged</th><th>Morning late trips</th><th>Extra km</th></tr></thead>
       <tbody>${report.buses.map((bus) => `<tr>
         <td>${fullDate(bus.report_date)}</td><td><button class="text-link" data-go="#bus/${encodeURIComponent(bus.bus_no)}">Bus ${esc(bus.bus_no)}</button><div class="hint">${esc(bus.driver_name || 'Driver not recorded')}</div></td>
         <td><span class="report-status ${bus.status === 'On time' ? 'ontime' : bus.status === 'Late' ? 'late' : 'missing'}">${esc(bus.status)}</span></td>
-        <td class="mono">${inr(bus.income_collected)}</td><td class="mono">${inr(bus.expenses)}${bus.bill_expenses ? `<div class="hint">incl. ${inr(bus.bill_expenses)} in bills</div>` : ''}</td><td class="mono">${inr(bus.net_collection)}</td>
+        <td class="mono">${inr(bus.income_collected)}</td><td class="mono">${inr(bus.expenses)}${Object.entries(bus.category_expenses || {}).map(([k, v]) => `<div class="hint">${esc(k)} ${inr(v)}</div>`).join('')}${bus.bill_expenses ? `<div class="hint">Bills ${inr(bus.bill_expenses)}</div>` : ''}</td><td class="mono">${inr(bus.net_collection)}</td>
         <td>${bus.trip_count}/${bus.trips_expected}</td><td>${bus.late_trips}</td><td class="mono">${kmText(bus.extra_km)}</td>
       </tr>`).join('')}</tbody></table></div>
     </div>
@@ -327,8 +328,9 @@ function busEntryPanels(lists, busNo) {
         <div class="error full" id="expense-error" hidden></div>
         <div class="field"><label for="exp-bus">Bus</label><select id="exp-bus" required disabled><option value="${esc(busNo)}" selected>Bus ${esc(busNo)}</option></select></div>
         <div class="field"><label for="exp-date">Date</label><input id="exp-date" type="date" max="${lists.today}" value="${esc(lists.today)}" required></div>
+        <div class="field"><label for="exp-category">Category</label><select id="exp-category">${(lists.expense_categories || ['Daily running']).map((c) => `<option value="${esc(c)}">${esc(c === 'Daily running' ? 'Daily running (diesel, toll…)' : c)}</option>`).join('')}</select></div>
         <div class="field"><label for="exp-amount">Amount (₹)</label><input id="exp-amount" type="number" min="0" step="0.01" required></div>
-        <div class="field"><label for="exp-mode">What to do</label><select id="exp-mode"><option value="add">Add to the day's expenses</option><option value="replace">Replace the day's total (to correct a mistake)</option></select></div>
+        <div class="field"><label for="exp-mode">What to do</label><select id="exp-mode"><option value="add">Add to this category's total for the day</option><option value="replace">Replace this category's total for the day (to correct a mistake)</option></select></div>
         <div class="field full"><label for="exp-note">What was it for</label><input id="exp-note" placeholder="Diesel, toll, puncture repair…"></div>
         <div class="btns full"><button class="btn" type="submit" id="exp-save">Save expense</button></div>
       </form>
@@ -371,8 +373,8 @@ function wireBusEntryForms(lists) {
     button.disabled = true;
     const date = $('#exp-date').value;
     try {
-      const saved = await postJSON('/api/reports/expense', { bus_no: $('#exp-bus').value, report_date: date, amount: $('#exp-amount').value, mode: $('#exp-mode').value, note: $('#exp-note').value });
-      toast(`Bus ${saved.bus_no}: expenses for ${date} are now ${inr(saved.expenses)}.`);
+      const saved = await postJSON('/api/reports/expense', { bus_no: $('#exp-bus').value, report_date: date, category: $('#exp-category').value, amount: $('#exp-amount').value, mode: $('#exp-mode').value, note: $('#exp-note').value });
+      toast(`Bus ${saved.bus_no}: ${saved.category && saved.category !== 'Daily running' ? saved.category : 'daily running expenses'} for ${date} are now ${inr(saved.expenses)}.`);
       const target = `#daily/${encodeURIComponent(`${date}~${date}!${$('#exp-bus').value}`)}`;
       if (location.hash === target) router(); else location.hash = target;
     } catch (err) {
