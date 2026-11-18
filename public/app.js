@@ -331,7 +331,6 @@ function busEntryPanels(lists, busNo) {
         <div class="field"><label for="exp-date">Date</label><input id="exp-date" type="date" max="${lists.today}" value="${esc(lists.today)}" required></div>
         <div class="field"><label for="exp-category">Category</label><select id="exp-category">${(lists.expense_categories || ['Daily running']).map((c) => `<option value="${esc(c)}">${esc(c === 'Daily running' ? 'Daily running (toll, other small costs…)' : c)}</option>`).join('')}</select></div>
         <div class="field"><label for="exp-amount">Amount (₹)</label><input id="exp-amount" type="number" min="0" step="0.01" required></div>
-        <div class="field"><label for="exp-mode">What to do</label><select id="exp-mode"><option value="add">Add to this category's total for the day</option><option value="replace">Replace this category's total for the day (to correct a mistake)</option></select></div>
         <div class="field full"><label for="exp-note">What was it for</label><input id="exp-note" placeholder="Litres and rate, toll, puncture repair…"></div>
         <div class="btns full"><button class="btn" type="submit" id="exp-save">Save expense</button></div>
       </form>
@@ -374,7 +373,7 @@ function wireBusEntryForms(lists) {
     button.disabled = true;
     const date = $('#exp-date').value;
     try {
-      const saved = await postJSON('/api/reports/expense', { bus_no: $('#exp-bus').value, report_date: date, category: $('#exp-category').value, amount: $('#exp-amount').value, mode: $('#exp-mode').value, note: $('#exp-note').value });
+      const saved = await postJSON('/api/reports/expense', { bus_no: $('#exp-bus').value, report_date: date, category: $('#exp-category').value, amount: $('#exp-amount').value, mode: 'add', note: $('#exp-note').value });
       toast(`Bus ${saved.bus_no}: ${saved.category && saved.category !== 'Daily running' ? saved.category : 'daily running expenses'} for ${date} are now ${inr(saved.expenses)}.`);
       const target = `#daily/${encodeURIComponent(`${date}~${date}!${$('#exp-bus').value}`)}`;
       if (location.hash === target) router(); else location.hash = target;

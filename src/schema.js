@@ -108,8 +108,8 @@ export const KINDS = {
   INSPECTION: 'Inspection',
 };
 
-// Categories management reads expenses by. "Daily running" is the plain per-day total (diesel, toll...) kept in the daily report.
-export const EXPENSE_CATEGORIES = ['Diesel', 'Driver weekly salary', 'Driver beta', 'Body Work', 'Under Chase', 'Electrical Charges', 'Seat', 'Insurance', 'F.C - expense', 'Tax', 'Broker expense'];
+// Categories for "Add an expense" (repair categories such as Body Work or Seat are entered on a bill instead). "Daily running" is the plain per-day total (diesel, toll...) kept in the daily report.
+export const EXPENSE_CATEGORIES = ['Diesel', 'Driver weekly salary', 'Driver beta', 'Insurance', 'F.C - expense', 'Tax', 'Broker expense'];
 export const DAILY_EXPENSE = 'Daily running';
 // Costs that are not a repair on the bus: they go in "Add an expense", never on a bill.
 export const BUSINESS_EXPENSES = ['Insurance', 'F.C - expense', 'Tax', 'Broker expense'];

@@ -596,11 +596,11 @@ test('a bill can split its total over several categories, which are reported by 
   await assert.rejects(service.saveEntry({ ...bill, lines: [] }), /what the bill was for/);
   const saved = await service.saveEntry({ ...bill, lines: [{ category: 'Electrical Charges', amount: 2000, description: 'Fog lamp, wiring' }, { category: 'Body Work', amount: 1000, description: 'Mirror' }] });
   await service.saveEntry({ ...bill, total_cost: 700, date_in: '2026-10-20', lines: [{ category: 'Brakes', description: 'Pads' }] });
-  await service.saveExpense({ bus_no: '01', report_date: '2026-10-20', amount: 500, category: 'Body Work' });
+  await assert.rejects(service.saveExpense({ bus_no: '01', report_date: '2026-10-20', amount: 500, category: 'Body Work' }), /category/);
   await service.saveExpense({ bus_no: '01', report_date: '2026-10-20', amount: 1200, category: 'Insurance' });
   const r = await service.getDailyReport('2026-10-20', '2026-10-20', '01');
-  assert.deepEqual(r.summary.by_category, { 'Body Work': 1500, 'Electrical Charges': 2000, Brakes: 700, Insurance: 1200 });
-  assert.equal(r.summary.expenses, 5400);
+  assert.deepEqual(r.summary.by_category, { 'Body Work': 1000, 'Electrical Charges': 2000, Brakes: 700, Insurance: 1200 });
+  assert.equal(r.summary.expenses, 4900);
   // the bill is one entry in the history, titled with its categories; each category counts in the repeat table
   const history = (await service.getBus('01')).entries.find((x) => x.entry_id === saved.entry_id);
   assert.equal(history.title, 'Electrical Charges + Body Work');
