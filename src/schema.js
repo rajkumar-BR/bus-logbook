@@ -66,6 +66,10 @@ export const TABS = {
     ['school_id', 'text'], ['retread_id', 'text'], ['tyre_no', 'text'], ['returned_date', 'date'], ['company', 'text'],
     ['cost', 'number'], ['bus_no', 'text'], ['notes', 'text'], ['bill_link', 'text'],
   ],
+  'Bill lines': [
+    ['school_id', 'text'], ['entry_id', 'text'], ['line_no', 'number'], ['bus_no', 'text'], ['category', 'text'],
+    ['amount', 'number'], ['description', 'text'], ['record_status', 'text'],
+  ],
   'Expense items': [
     ['school_id', 'text'], ['expense_id', 'text'], ['bus_no', 'text'], ['expense_date', 'date'], ['category', 'text'],
     ['amount', 'number'], ['note', 'text'], ['record_status', 'text'], ['entered_by', 'text'], ['entered_at', 'datetime'],
@@ -107,6 +111,11 @@ export const KINDS = {
 // Categories management reads expenses by. "Daily running" is the plain per-day total (diesel, toll...) kept in the daily report.
 export const EXPENSE_CATEGORIES = ['Body Work', 'Under Chase', 'Electrical Charges', 'Seat', 'Insurance', 'F.C - expense', 'Tax', 'Broker expense'];
 export const DAILY_EXPENSE = 'Daily running';
+// Costs that are not a repair on the bus: they go in "Add an expense", never on a bill.
+export const BUSINESS_EXPENSES = ['Insurance', 'F.C - expense', 'Tax', 'Broker expense'];
+// What a bill line can be. Older names are merged into the new ones.
+export const BILL_CATEGORIES = ['Brakes', 'Tyres & alignment', 'Electrical Charges', 'Engine & cooling', 'Suspension', 'Body Work', 'AC / fans', 'Clutch & gearbox', 'Under Chase', 'Seat', 'Other'];
+export const SYSTEM_ALIASES = { 'Battery & electrical': 'Electrical Charges', 'Doors & body': 'Body Work' };
 
 export const STATUS = {
   ON_ROUTE: 'On route',
@@ -116,10 +125,7 @@ export const STATUS = {
 
 export const DEFAULT_LISTS = {
   school_id: [],
-  systems: [
-    'Brakes', 'Tyres & alignment', 'Battery & electrical', 'Engine & cooling',
-    'Suspension', 'Doors & body', 'AC / fans', 'Clutch & gearbox', 'Other',
-  ],
+  systems: BILL_CATEGORIES,
   entry_kinds: Object.values(KINDS),
   bus_statuses: Object.values(STATUS),
   doc_types: ['Fitness certificate', 'Insurance', 'Permit', 'Pollution (PUC)', 'Road tax'],

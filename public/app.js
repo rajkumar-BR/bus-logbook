@@ -646,6 +646,14 @@ async function viewCorrect(entryId) {
   return entryForm(entry, entryId);
 }
 
+function lineRow(systems, l = {}) {
+  return `<div class="partrow linerow withrm">
+    <select aria-label="Category" data-l="category"><option value="">Choose…</option>${systems.map((s) => `<option ${s === l.category ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select>
+    <input aria-label="Amount" data-l="amount" class="mono" inputmode="numeric" placeholder="₹" value="${esc(l.amount)}">
+    <input aria-label="What was done or bought" data-l="description" placeholder="e.g. Fog lamp, wiring, fuses" value="${esc(l.description)}">
+    <button type="button" class="rm" aria-label="Remove this category">×</button></div>`;
+}
+
 function partRow(p = {}) {
   return `<div class="partrow withrm">
     <input aria-label="Part" data-p="part_name" placeholder="e.g. Front brake pads" value="${esc(p.part_name)}">
@@ -701,8 +709,12 @@ async function entryForm(e, correctsId = null) {
       <div class="field"><label for="f-date-in">Date in<span class="req">*</span></label><input id="f-date-in" type="date" max="${lists.today}" value="${v('date_in') || lists.today}"></div>
       <div class="field"><label for="f-date-out">Date out</label><input id="f-date-out" type="date" value="${v('date_out')}"><span class="hint">Leave blank if the bus is still in the workshop.</span></div>
       <div class="field"><label for="f-odo">Odometer (km)</label><input id="f-odo" class="mono" inputmode="numeric" value="${v('odometer_km')}"></div>
-      <div class="field"><label for="f-sys">System affected<span class="req" id="sys-req">*</span></label>
-        <select id="f-sys"><option value="">Choose…</option>${lists.systems.map((s) => `<option ${s === e.system ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select></div>
+      <fieldset class="field full" id="lines-box"><legend>What was the bill for?<span class="req" id="sys-req">*</span></legend>
+        <div class="partrow linerow withrm head hint"><span>Category</span><span>Amount (₹)</span><span>What was done or bought</span><span></span></div>
+        <div id="lines">${(e.lines && e.lines.length ? e.lines : [{ category: e.system || '' }]).map((l) => lineRow(lists.systems, l)).join('')}</div>
+        <button type="button" class="btn ghost" id="add-line" style="margin-top:10px">+ Add another category</button>
+        <span class="hint" id="lines-sum">One category: no amount needed, it takes the bill total. Mixed bill (say electrical and body work): add a line for each with its amount. Insurance, tax, F.C and broker expenses go in Add an expense.</span>
+      </fieldset>
       <div class="field full"><label for="f-why">Problem reported (why it came in)</label><textarea id="f-why">${v('problem_reported')}</textarea></div>
       <div class="inline-warn full field" id="repeat-warn" hidden></div>
       <fieldset class="field full"><legend>What was changed</legend>
@@ -755,6 +767,23 @@ async function entryForm(e, correctsId = null) {
   drop.addEventListener('drop', (ev) => takeFile(ev.dataTransfer.files[0]));
 
   // Parts rows
+  // Category lines of the bill
+  const lineRows = () => $$('#lines .linerow');
+  const firstCat = () => (($$('#lines select')[0] || {}).value || '');
+  const money = (x) => Number(String(x).replace(/[,₹\s]/g, ''));
+  function showSum() {
+    const rows = lineRows();
+    const total = money($('#f-total').value);
+    const filled = rows.map((r) => $('[data-l=amount]', r).value.trim()).filter(Boolean);
+    const hint = $('#lines-sum');
+    if (rows.length < 2 && !filled.length) { hint.textContent = 'One category: no amount needed, it takes the bill total. Mixed bill (say electrical and body work): add a line for each with its amount. Insurance, tax, F.C and broker expenses go in Add an expense.'; return; }
+    const sum = rows.reduce((a, r) => a + (money($('[data-l=amount]', r).value) || 0), 0);
+    hint.textContent = Math.abs(sum - total) < 0.01 ? `Lines add up to ₹${sum} · matches the bill total.` : `Lines add up to ₹${sum} · bill total ₹${Number.isFinite(total) ? total : 0} · difference ₹${(Number.isFinite(total) ? total : 0) - sum}.`;
+  }
+  $('#add-line').addEventListener('click', () => { $('#lines').insertAdjacentHTML('beforeend', lineRow(lists.systems)); showSum(); });
+  $('#lines').addEventListener('click', (ev) => { if (ev.target.classList.contains('rm') && lineRows().length > 1) { ev.target.closest('.linerow').remove(); showSum(); checkRepeat(); } });
+  $('#lines').addEventListener('input', showSum);
+  $('#f-total').addEventListener('input', showSum);
   $('#add-part').addEventListener('click', () => $('#parts').insertAdjacentHTML('beforeend', partRow()));
   $('#parts').addEventListener('click', (ev) => {
     if (!ev.target.classList.contains('rm')) return;
@@ -787,7 +816,7 @@ async function entryForm(e, correctsId = null) {
       n += setVal('#f-date-out', r.date_out);
       n += setVal('#f-workshop', r.workshop);
       n += setVal('#f-billno', r.bill_no);
-      n += setVal('#f-sys', r.system);
+      n += setVal('#lines select', r.system);
       n += setVal('#f-odo', r.odometer_km);
       n += setVal('#f-why', r.problem_reported);
       n += setVal('#f-root', r.root_cause);
@@ -821,7 +850,7 @@ async function entryForm(e, correctsId = null) {
   async function checkRepeat() {
     const k = kindNow();
     $('#sys-req').hidden = !['Repair', 'Breakdown'].includes(k);
-    const body = { bus_no: $('#f-bus').value, system: $('#f-sys').value, date_in: $('#f-date-in').value, kind: k, exclude_entry_id: correctsId };
+    const body = { bus_no: $('#f-bus').value, system: firstCat(), date_in: $('#f-date-in').value, kind: k, exclude_entry_id: correctsId };
     if (!body.bus_no || !body.system || !body.date_in) { setRepeat(null); return; }
     try { setRepeat(await postJSON('/api/check-repeat', body)); } catch { setRepeat(null); }
   }
@@ -831,7 +860,7 @@ async function entryForm(e, correctsId = null) {
     $('#repeat-warn').textContent = repeatOn ? `Heads up: ${r.message}` : '';
     $('#root-req').hidden = !repeatOn;
   }
-  ['#f-bus', '#f-sys', '#f-date-in'].forEach((q) => $(q).addEventListener('change', checkRepeat));
+  ['#f-bus', '#lines', '#f-date-in'].forEach((q) => $(q).addEventListener('change', checkRepeat));
   $$('input[name=kind]').forEach((r) => r.addEventListener('change', checkRepeat));
   checkRepeat();
 
@@ -846,7 +875,7 @@ async function entryForm(e, correctsId = null) {
       date_in: $('#f-date-in').value,
       date_out: $('#f-date-out').value,
       odometer_km: $('#f-odo').value.trim(),
-      system: $('#f-sys').value,
+      lines: lineRows().map((r) => ({ category: $('[data-l=category]', r).value, amount: $('[data-l=amount]', r).value.trim(), description: $('[data-l=description]', r).value.trim() })).filter((l) => l.category || l.amount || l.description),
       problem_reported: $('#f-why').value,
       root_cause: $('#f-root').value,
       workshop: $('#f-workshop').value,

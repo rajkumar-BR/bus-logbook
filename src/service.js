@@ -3,7 +3,9 @@
 
 import os from 'node:os';
 import path from 'node:path';
-import { KINDS, STATUS, DEFAULT_LISTS, EXPENSE_CATEGORIES, DAILY_EXPENSE } from './schema.js';
+import { KINDS, STATUS, DEFAULT_LISTS, EXPENSE_CATEGORIES, DAILY_EXPENSE, BUSINESS_EXPENSES, BILL_CATEGORIES, SYSTEM_ALIASES } from './schema.js';
+
+const canon = (s) => SYSTEM_ALIASES[s] || s;
 import * as L from './logic.js';
 import * as I from './importer.js';
 import { UserError } from './ai.js';
@@ -20,21 +22,28 @@ function localNow() {
 export function createService(storage, { readBill = null, today = localToday, user = process.env.OFFICE_USER || os.userInfo().username } = {}) {
   async function load() {
     const t = {};
-    for (const tab of ['Buses', 'Routes', 'Route assignments', 'Daily reports', 'Trips', 'Entries', 'Parts changed', 'Workshops', 'Lists', 'Settings', 'Bus documents', 'Trip settings', 'Expense items']) {
+    for (const tab of ['Buses', 'Routes', 'Route assignments', 'Daily reports', 'Trips', 'Entries', 'Parts changed', 'Workshops', 'Lists', 'Settings', 'Bus documents', 'Trip settings', 'Expense items', 'Bill lines']) {
       t[tab] = await storage.read(tab);
     }
     const lists = { ...DEFAULT_LISTS, ...L.listsFrom(t.Lists) };
-    // management's expense categories can also be chosen on a bill, whatever the Lists table says
-    const base = lists.systems.filter((x) => !EXPENSE_CATEGORIES.includes(x));
+    const entries = t.Entries.filter((e) => e.entry_id && L.isActive(e)).map((e) => ({ ...e, system: canon(e.system) }));
+    // A bill that covers several categories counts once in each for repeat checks; its money is split by line so totals stay the same.
+    const linesOf = (id) => t['Bill lines'].filter((l) => l.entry_id === id && l.record_status !== 'Corrected' && l.record_status !== 'Voided');
+    const repairLines = entries.flatMap((e) => { const ls = linesOf(e.entry_id); return ls.length > 1 ? ls.map((l) => ({ ...e, system: canon(l.category), total_cost: Number(l.amount) || 0 })) : [e]; });
+    // A bill line is one of the repair categories: older names are merged (Battery & electrical, Doors & body) and business costs (insurance, tax…) belong in Add an expense.
+    const base = [...new Set(lists.systems.map(canon))].filter((x) => !BUSINESS_EXPENSES.includes(x));
+    const missing = BILL_CATEGORIES.filter((x) => !base.includes(x) && x !== 'Other');
     const other = base.indexOf('Other');
-    lists.systems = other < 0 ? [...base, ...EXPENSE_CATEGORIES] : [...base.slice(0, other), ...EXPENSE_CATEGORIES, ...base.slice(other)];
+    lists.systems = other < 0 ? [...base, ...missing] : [...base.slice(0, other), ...missing, ...base.slice(other)];
     return {
       buses: t.Buses.filter((b) => b.bus_no),
       routes: t.Routes,
       assignments: t['Route assignments'],
       dailyReports: t['Daily reports'].filter((report) => report.report_id && L.isActive(report)),
       trips: t.Trips.filter((trip) => trip.trip_id && L.isActive(trip)),
-      entries: t.Entries.filter((e) => e.entry_id && L.isActive(e)),
+      entries,
+      billLines: t['Bill lines'].filter((l) => l.entry_id),
+      repairLines,
       expenseItems: t['Expense items'].filter((x) => x.expense_id && x.record_status !== 'Removed'),
       voided: t.Entries.filter((e) => e.entry_id && e.record_status === 'Voided'),
       parts: t['Parts changed'].filter(L.isActive),
@@ -61,13 +70,13 @@ export function createService(storage, { readBill = null, today = localToday, us
   };
   const busLabel = (d, b) => `Bus ${b.bus_no}${currentRoute(d, b.bus_no) ? ` · ${currentRoute(d, b.bus_no)}` : ''}`;
 
-  function entryTitle(e, parts) {
+  function entryTitle(e, parts, cats = []) {
     if (e.kind === KINDS.SERVICE) return 'Scheduled service';
     if (e.kind === KINDS.INSPECTION) return 'Inspection';
     if (e.kind === TYRE_RETREAD) return 'Tyre retread';
     if (e.kind === NEW_TYRE) return 'New tyre';
     if (parts.length) return parts.map((p) => p.part_name).slice(0, 3).join(', ');
-    return e.system || e.kind;
+    return cats.length > 1 ? cats.join(' + ') : e.system || e.kind;
   }
 
   // One trip is a run that ends at the school; a bus that goes out again after reaching it has another route and so another trip.
@@ -161,7 +170,7 @@ export function createService(storage, { readBill = null, today = localToday, us
       const svc = L.serviceStatus(b, be, d.settings, t);
       const spent = L.spentSinceLastService(be);
       const spentYear = be.filter((e) => e.date_in.startsWith(year)).reduce((sum, e) => sum + (Number(e.total_cost) || 0), 0);
-      const f = L.findings({ bus: b, busEntries: be, busParts: d.parts.filter((p) => p.bus_no === b.bus_no), allEntries: d.entries, allParts: d.parts, activeBusCount: activeBuses(d).length, routes: d.routes, today: t });
+      const f = L.findings({ bus: b, busEntries: d.repairLines.filter((x) => x.bus_no === b.bus_no), busParts: d.parts.filter((p) => p.bus_no === b.bus_no), allEntries: d.repairLines, allParts: d.parts, activeBusCount: activeBuses(d).length, routes: d.routes, today: t });
       return {
         bus_no: b.bus_no,
         tyre_changes: tyreChanges(b.bus_no),
@@ -202,7 +211,7 @@ export function createService(storage, { readBill = null, today = localToday, us
     const svc = L.serviceStatus(b, be, d.settings, t);
     const periods = L.costPeriods(be);
     const spent = L.spentSinceLastService(be);
-    const f = L.findings({ bus: b, busEntries: be, busParts: bp, allEntries: d.entries, allParts: d.parts, activeBusCount: activeBuses(d).length, routes: d.routes, today: t });
+    const f = L.findings({ bus: b, busEntries: d.repairLines.filter((x) => x.bus_no === b.bus_no), busParts: bp, allEntries: d.repairLines, allParts: d.parts, activeBusCount: activeBuses(d).length, routes: d.routes, today: t });
     const docs = d.docs.filter((x) => x.bus_no === busNo);
     const docDate = (type) => (docs.filter((x) => x.doc_type === type).sort((a, z) => (a.valid_until < z.valid_until ? 1 : -1))[0] || {}).valid_until || '';
 
@@ -211,7 +220,7 @@ export function createService(storage, { readBill = null, today = localToday, us
       const before = periods.find((p) => p.end && p.end.entry_id === e.entry_id);
       return {
         ...e,
-        title: entryTitle(e, parts),
+        title: entryTitle(e, parts, d.billLines.filter((l) => l.entry_id === e.entry_id && l.record_status !== 'Corrected' && l.record_status !== 'Voided').map((l) => canon(l.category))),
         route_name: routeName(d, e.route_at_time),
         parts,
         bill_url: storage.fileUrl(e.bill_link),
@@ -256,7 +265,7 @@ export function createService(storage, { readBill = null, today = localToday, us
       tyreHistory,
       entries,
       voided: d.voided.filter((e) => e.bus_no === busNo).sort(L.byDate).reverse().map((e) => ({
-        entry_id: e.entry_id, kind: e.kind, title: e.system || e.kind, date_in: e.date_in, total_cost: e.total_cost,
+        entry_id: e.entry_id, kind: e.kind, title: (d.billLines.filter((l) => l.entry_id === e.entry_id && l.record_status !== 'Corrected' && l.record_status !== 'Voided').map((l) => canon(l.category)).join(' + ')) || e.system || e.kind, date_in: e.date_in, total_cost: e.total_cost,
         reason: e.voided_reason, removed_by: e.voided_by, removed_at: e.voided_at,
       })),
     };
@@ -266,7 +275,8 @@ export function createService(storage, { readBill = null, today = localToday, us
     const d = await load();
     const e = d.entries.find((x) => x.entry_id === entryId);
     if (!e) throw new UserError(`Entry ${entryId} was not found, or it has already been corrected or removed.`, 404);
-    return { ...e, parts: d.parts.filter((p) => p.entry_id === entryId), bill_url: storage.fileUrl(e.bill_link) };
+    const lines = d.billLines.filter((l) => l.entry_id === entryId && l.record_status !== 'Corrected' && l.record_status !== 'Voided').map((l) => ({ category: canon(l.category), amount: l.amount, description: l.description || '' }));
+    return { ...e, lines: lines.length ? lines : [{ category: e.system, amount: '', description: '' }], parts: d.parts.filter((p) => p.entry_id === entryId), bill_url: storage.fileUrl(e.bill_link) };
   }
 
   async function getRepeats() {
@@ -274,9 +284,9 @@ export function createService(storage, { readBill = null, today = localToday, us
     const t = today();
     const buses = activeBuses(d);
     const systems = d.lists.systems.filter((s) => s !== 'Other');
-    const matrix = L.repeatMatrix(d.entries, buses, systems, t).map((r) => ({ ...r, route: currentRoute(d, r.bus_no) }));
+    const matrix = L.repeatMatrix(d.repairLines, buses, systems, t).map((r) => ({ ...r, route: currentRoute(d, r.bus_no) }));
     const patterns = buses.flatMap((b) => {
-      const f = L.findings({ bus: b, busEntries: d.entries.filter((e) => e.bus_no === b.bus_no), busParts: d.parts.filter((p) => p.bus_no === b.bus_no), allEntries: d.entries, allParts: d.parts, activeBusCount: buses.length, routes: d.routes, today: t });
+      const f = L.findings({ bus: b, busEntries: d.repairLines.filter((e) => e.bus_no === b.bus_no), busParts: d.parts.filter((p) => p.bus_no === b.bus_no), allEntries: d.repairLines, allParts: d.parts, activeBusCount: buses.length, routes: d.routes, today: t });
       if (!f.watch.length) return [];
       const extra = f.findings.find((x) => x.level === 'crit' && !/ repaired \d+ times/.test(x.title)) || f.findings.find((x) => !/ repaired \d+ times/.test(x.title));
       return [{ bus_no: b.bus_no, headline: `Bus ${b.bus_no} · ${f.watch[0].system} ×${f.watch[0].count}`, count: f.watch[0].count, detail: extra ? extra.title : '' }];
@@ -284,7 +294,6 @@ export function createService(storage, { readBill = null, today = localToday, us
     return { systems, matrix, patterns, today: t };
   }
 
-  const BILLS = 'Repair & tyre bills';
   async function getDailyReport(startDate = today(), endDate = startDate, busNo = '', filters = {}) {
     const from = String(startDate || today());
     const to = String(endDate || from);
@@ -330,7 +339,10 @@ export function createService(storage, { readBill = null, today = localToday, us
         const dayBills = d.entries.filter((e) => e.bus_no === bus.bus_no && e.date_in === reportDate);
         const billExpenses = dayBills.reduce((a, e) => a + (Number(e.total_cost) || 0), 0);
         const billByCategory = {};
-        for (const e of dayBills) { const k = EXPENSE_CATEGORIES.includes(e.system) ? e.system : BILLS; billByCategory[k] = (billByCategory[k] || 0) + (Number(e.total_cost) || 0); }
+        for (const e of dayBills) {
+          const ls = d.billLines.filter((l) => l.entry_id === e.entry_id && l.record_status !== 'Corrected' && l.record_status !== 'Voided');
+          for (const l of ls.length ? ls.map((x) => [canon(x.category), Number(x.amount) || 0]) : [[e.system || e.kind, Number(e.total_cost) || 0]]) billByCategory[l[0]] = (billByCategory[l[0]] || 0) + l[1];
+        }
         const typedExpenses = Number(daily?.expenses) || 0;
         const categoryExpenses = {};
         for (const x of d.expenseItems.filter((x) => x.bus_no === bus.bus_no && x.expense_date === reportDate)) categoryExpenses[x.category] = (categoryExpenses[x.category] || 0) + (Number(x.amount) || 0);
@@ -957,7 +969,7 @@ export function createService(storage, { readBill = null, today = localToday, us
   async function checkRepeat({ bus_no, system, date_in, kind, exclude_entry_id }) {
     if (![KINDS.REPAIR, KINDS.BREAKDOWN].includes(kind)) return { isRepeat: false, count: 0 };
     const d = await load();
-    const r = L.repeatCheck(d.entries, { bus_no, system, date_in, exclude_entry_id }, Number(d.settings.repeat_window_days) || 180);
+    const r = L.repeatCheck(d.repairLines, { bus_no, system, date_in, exclude_entry_id }, Number(d.settings.repeat_window_days) || 180);
     const months = Math.round(r.windowDays / 30);
     return {
       isRepeat: r.isRepeat,
@@ -995,7 +1007,7 @@ export function createService(storage, { readBill = null, today = localToday, us
       date_in: String(input.date_in || '').trim(),
       date_out: String(input.date_out || '').trim(),
       odometer_km: input.odometer_km === '' || input.odometer_km == null ? '' : Number(String(input.odometer_km).replace(/[,\s]/g, '')),
-      system: String(input.system || '').trim(),
+      system: canon(String(input.system || '').trim()),
       problem_reported: String(input.problem_reported || '').trim(),
       root_cause: String(input.root_cause || '').trim(),
       workshop: String(input.workshop || '').trim(),
@@ -1011,12 +1023,27 @@ export function createService(storage, { readBill = null, today = localToday, us
     if (e.date_in > today()) throw new UserError('The date in cannot be in the future.');
     if (e.date_out && !isDate(e.date_out)) throw new UserError('Enter the date out as a date, or leave it blank if the bus is still in the workshop.');
     if (e.date_out && e.date_out < e.date_in) throw new UserError('The date out is before the date in.');
-    if ([KINDS.REPAIR, KINDS.BREAKDOWN].includes(e.kind) && !e.system) throw new UserError('Choose which system was repaired (brakes, tyres…).');
     if (e.odometer_km !== '' && !(Number.isFinite(e.odometer_km) && e.odometer_km >= 0)) throw new UserError('The odometer reading must be a number of kilometres.');
     for (const k of ['labour_cost', 'total_cost']) {
       if (e[k] !== '' && !(Number.isFinite(e[k]) && e[k] >= 0)) throw new UserError('Costs must be amounts in rupees, like 18400.');
     }
     if (e.total_cost === '') throw new UserError('Enter the bill total (use 0 if there was no charge).');
+    // Category lines: what the bill was for, and how much of the total went to each
+    const lines = (Array.isArray(input.lines) ? input.lines : [])
+      .map((l) => ({ category: canon(String(l.category || '').trim()), amount: l.amount === '' || l.amount == null ? '' : Number(String(l.amount).replace(/[,₹\s]/g, '')), description: String(l.description || '').trim() }))
+      .filter((l) => l.category || l.amount !== '' || l.description);
+    if (lines.length === 1 && lines[0].amount === '') lines[0].amount = e.total_cost;
+    for (const l of lines) {
+      if (!l.category) throw new UserError('Choose a category for every line of the bill.');
+      if (!d.lists.systems.includes(l.category)) throw new UserError(`"${l.category}" is not a bill category. Insurance, tax, F.C and broker expenses go in Add an expense.`);
+      if (!(Number.isFinite(l.amount) && l.amount >= 0)) throw new UserError(`Enter the amount for ${l.category}.`);
+    }
+    if (lines.length) {
+      const sum = lines.reduce((a, l) => a + l.amount, 0);
+      if (Math.abs(sum - e.total_cost) > 0.01) throw new UserError(`The category amounts add up to ₹${sum} but the bill total is ₹${e.total_cost}.`);
+      e.system = lines.reduce((best, l) => (l.amount > best.amount ? l : best), lines[0]).category;
+    }
+    if ([KINDS.REPAIR, KINDS.BREAKDOWN].includes(e.kind) && !e.system) throw new UserError('Choose what the bill was for (brakes, tyres…).');
     const parts = (Array.isArray(input.parts) ? input.parts : [])
       .map((p) => ({
         part_name: String(p.part_name || '').trim(),
@@ -1031,7 +1058,7 @@ export function createService(storage, { readBill = null, today = localToday, us
       if (p.part_cost !== '' && !Number.isFinite(p.part_cost)) throw new UserError(`The cost for "${p.part_name}" must be a number.`);
       if (p.warranty_until && !isDate(p.warranty_until)) throw new UserError(`The warranty date for "${p.part_name}" must be a date.`);
     }
-    return { e, parts };
+    return { e, parts, lines };
   }
 
   // Keep the bus status in step: an active visit with no date out means the bus is still in the workshop.
@@ -1048,7 +1075,7 @@ export function createService(storage, { readBill = null, today = localToday, us
 
   async function saveEntry(input, files = {}, { correctsId = null } = {}) {
     const d = await load();
-    const { e, parts } = validate(input, d);
+    const { e, parts, lines } = validate(input, d);
     let old = null;
     if (correctsId) {
       old = d.entries.find((x) => x.entry_id === correctsId);
@@ -1056,7 +1083,8 @@ export function createService(storage, { readBill = null, today = localToday, us
       if (old.bus_no !== e.bus_no) throw new UserError('A correction must stay on the same bus. Add a new entry for the other bus instead.');
     }
 
-    const rep = await checkRepeat({ ...e, exclude_entry_id: correctsId });
+    let rep = await checkRepeat({ ...e, exclude_entry_id: correctsId });
+    for (const l of lines) { if (rep.isRepeat) break; const more = await checkRepeat({ ...e, system: l.category, exclude_entry_id: correctsId }); if (more.isRepeat) rep = more; }
     if (rep.isRepeat && e.root_cause.length < 12) {
       throw new UserError(`${rep.message} Write at least a short sentence in "Root cause".`);
     }
@@ -1099,11 +1127,13 @@ export function createService(storage, { readBill = null, today = localToday, us
       };
       tx.append('Entries', [row]);
       tx.append('Parts changed', parts.map((p) => ({ entry_id: entryId, bus_no: e.bus_no, system: e.system, ...p, record_status: 'Active' })));
+      if (lines.length) tx.append('Bill lines', lines.map((l, i) => ({ entry_id: entryId, line_no: i + 1, bus_no: e.bus_no, ...l, record_status: 'Active' })));
 
       const log = [];
       if (old) {
         tx.update('Entries', (r) => r.entry_id === correctsId, { record_status: 'Corrected' });
         tx.update('Parts changed', (r) => r.entry_id === correctsId, { record_status: 'Corrected' });
+        tx.update('Bill lines', (r) => r.entry_id === correctsId, { record_status: 'Corrected' });
         for (const k of Object.keys(e)) {
           if (String(old[k] ?? '') !== String(row[k] ?? '')) {
             log.push({ field: k, old_value: String(old[k] ?? ''), new_value: String(row[k] ?? '') });
@@ -1178,6 +1208,7 @@ export function createService(storage, { readBill = null, today = localToday, us
       if (!e) throw new UserError(`Entry ${entryId} was not found, or it has already been corrected or removed.`, 404);
       tx.update('Entries', (r) => r.entry_id === entryId, { record_status: 'Voided', voided_reason: why, voided_by: user, voided_at: now });
       tx.update('Parts changed', (p) => p.entry_id === entryId, { record_status: 'Voided' });
+      tx.update('Bill lines', (p) => p.entry_id === entryId, { record_status: 'Voided' });
       tx.append('Change log', [{ timestamp: now, user, action: 'Removed', tab: 'Entries', record_id: entryId, field: 'reason', old_value: `${e.kind}, Bus ${e.bus_no}, ₹${e.total_cost}`, new_value: why }]);
       syncBusStatus(tx, e.bus_no, now);
       return { entry_id: entryId, bus_no: e.bus_no };

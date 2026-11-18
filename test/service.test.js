@@ -5,7 +5,7 @@ import { createService } from '../src/service.js';
 function memoryStorage(initial = {}) {
   const tables = Object.fromEntries([
     'Buses', 'Routes', 'Route assignments', 'Daily reports', 'Trips', 'Entries', 'Parts changed',
-    'Workshops', 'Lists', 'Settings', 'Bus documents', 'Change log', 'Tyres', 'Tyre fitments', 'Tyre retreads', 'Trip settings', 'Expense items',
+    'Workshops', 'Lists', 'Settings', 'Bus documents', 'Change log', 'Tyres', 'Tyre fitments', 'Tyre retreads', 'Trip settings', 'Expense items', 'Bill lines',
   ].map((tab) => [tab, initial[tab] || []]));
   return {
     tables,
@@ -580,15 +580,32 @@ test('categorised expenses add to the day, show by category, and can be replaced
   assert.ok((await service.getLists()).expense_categories.includes('Broker expense'));
 });
 
-test('management categories can be chosen on a bill and are reported by category', async () => {
-  const storage = memoryStorage({ Buses: [{ bus_no: '01', driver_name: 'D', active: true }], Lists: [{ systems: 'Brakes' }, { systems: 'Other' }] });
+test('a bill can split its total over several categories, which are reported by category', async () => {
+  const storage = memoryStorage({
+    Buses: [{ bus_no: '01', driver_name: 'D', active: true }],
+    Lists: [{ systems: 'Brakes' }, { systems: 'Battery & electrical' }, { systems: 'Doors & body' }, { systems: 'Insurance' }, { systems: 'Other' }],
+  });
   const service = createService(storage, { today: () => '2026-10-23', user: 'test' });
+  // old names are merged, business costs are not bill categories
   const systems = (await service.getLists()).systems;
-  assert.deepEqual(systems, ['Brakes', 'Body Work', 'Under Chase', 'Electrical Charges', 'Seat', 'Insurance', 'F.C - expense', 'Tax', 'Broker expense', 'Other']);
-  await service.saveEntry({ bus_no: '01', kind: 'Repair', system: 'Body Work', problem_reported: 'Dent', root_cause: 'Panel beaten', date_in: '2026-10-20', date_out: '2026-10-20', total_cost: 4000 });
-  await service.saveEntry({ bus_no: '01', kind: 'Repair', system: 'Brakes', problem_reported: 'Noise', root_cause: 'Pads', date_in: '2026-10-20', date_out: '2026-10-20', total_cost: 1000 });
+  assert.ok(systems.includes('Electrical Charges') && systems.includes('Body Work') && systems.includes('Under Chase') && systems.includes('Seat'));
+  assert.ok(!systems.includes('Battery & electrical') && !systems.includes('Doors & body') && !systems.includes('Insurance') && !systems.includes('Tax'));
+  const bill = { bus_no: '01', kind: 'Repair', date_in: '2026-10-20', date_out: '2026-10-20', problem_reported: 'x', total_cost: 3000 };
+  await assert.rejects(service.saveEntry({ ...bill, lines: [{ category: 'Electrical Charges', amount: 2000 }, { category: 'Body Work', amount: 500 }] }), /add up to ₹2500 but the bill total is ₹3000/);
+  await assert.rejects(service.saveEntry({ ...bill, lines: [{ category: 'Tax', amount: 3000 }] }), /Add an expense/);
+  await assert.rejects(service.saveEntry({ ...bill, lines: [] }), /what the bill was for/);
+  const saved = await service.saveEntry({ ...bill, lines: [{ category: 'Electrical Charges', amount: 2000, description: 'Fog lamp, wiring' }, { category: 'Body Work', amount: 1000, description: 'Mirror' }] });
+  await service.saveEntry({ ...bill, total_cost: 700, date_in: '2026-10-20', lines: [{ category: 'Brakes', description: 'Pads' }] });
   await service.saveExpense({ bus_no: '01', report_date: '2026-10-20', amount: 500, category: 'Body Work' });
+  await service.saveExpense({ bus_no: '01', report_date: '2026-10-20', amount: 1200, category: 'Insurance' });
   const r = await service.getDailyReport('2026-10-20', '2026-10-20', '01');
-  assert.deepEqual(r.summary.by_category, { 'Body Work': 4500, 'Repair & tyre bills': 1000 });
-  assert.equal(r.summary.expenses, 5500);
+  assert.deepEqual(r.summary.by_category, { 'Body Work': 1500, 'Electrical Charges': 2000, Brakes: 700, Insurance: 1200 });
+  assert.equal(r.summary.expenses, 5400);
+  // the bill is one entry in the history, titled with its categories; each category counts in the repeat table
+  const history = (await service.getBus('01')).entries.find((x) => x.entry_id === saved.entry_id);
+  assert.equal(history.title, 'Electrical Charges + Body Work');
+  const row = (await service.getRepeats()).matrix.find((x) => x.bus_no === '01');
+  assert.ok(row.counts.reduce((a, b) => a + b, 0) >= 3);
+  // an entry with an older system name is shown under the merged name
+  assert.equal((await service.getEntry(saved.entry_id)).lines.length, 2);
 });
