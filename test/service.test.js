@@ -609,3 +609,24 @@ test('a bill can split its total over several categories, which are reported by 
   // an entry with an older system name is shown under the merged name
   assert.equal((await service.getEntry(saved.entry_id)).lines.length, 2);
 });
+
+test('diesel is an expense category and is reported on its own', async () => {
+  const storage = memoryStorage({ Buses: [{ bus_no: '01', driver_name: 'D', active: true }] });
+  const service = createService(storage, { today: () => '2026-10-23', user: 'test' });
+  assert.ok((await service.getLists()).expense_categories.includes('Diesel'));
+  await service.saveExpense({ bus_no: '01', report_date: '2026-10-20', amount: 4200, category: 'Diesel', note: '45 L' });
+  const r = await service.getDailyReport('2026-10-20', '2026-10-20', '01');
+  assert.deepEqual(r.summary.by_category, { Diesel: 4200 });
+  assert.equal(r.buses[0].expenses, 4200);
+});
+
+test('driver weekly salary and beta are expense categories', async () => {
+  const storage = memoryStorage({ Buses: [{ bus_no: '01', driver_name: 'D', active: true }] });
+  const service = createService(storage, { today: () => '2026-10-23', user: 'test' });
+  const cats = (await service.getLists()).expense_categories;
+  assert.ok(cats.includes('Driver weekly salary') && cats.includes('Driver beta'));
+  await service.saveExpense({ bus_no: '01', report_date: '2026-10-17', amount: 3500, category: 'Driver weekly salary', note: 'Week ending Sat 17 Oct' });
+  await service.saveExpense({ bus_no: '01', report_date: '2026-10-17', amount: 600, category: 'Driver beta' });
+  const r = await service.getDailyReport('2026-10-17', '2026-10-17', '01');
+  assert.deepEqual(r.summary.by_category, { 'Driver weekly salary': 3500, 'Driver beta': 600 });
+});

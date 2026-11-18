@@ -329,10 +329,10 @@ function busEntryPanels(lists, busNo) {
         <div class="error full" id="expense-error" hidden></div>
         <div class="field"><label for="exp-bus">Bus</label><select id="exp-bus" required disabled><option value="${esc(busNo)}" selected>Bus ${esc(busNo)}</option></select></div>
         <div class="field"><label for="exp-date">Date</label><input id="exp-date" type="date" max="${lists.today}" value="${esc(lists.today)}" required></div>
-        <div class="field"><label for="exp-category">Category</label><select id="exp-category">${(lists.expense_categories || ['Daily running']).map((c) => `<option value="${esc(c)}">${esc(c === 'Daily running' ? 'Daily running (diesel, toll…)' : c)}</option>`).join('')}</select></div>
+        <div class="field"><label for="exp-category">Category</label><select id="exp-category">${(lists.expense_categories || ['Daily running']).map((c) => `<option value="${esc(c)}">${esc(c === 'Daily running' ? 'Daily running (toll, other small costs…)' : c)}</option>`).join('')}</select></div>
         <div class="field"><label for="exp-amount">Amount (₹)</label><input id="exp-amount" type="number" min="0" step="0.01" required></div>
         <div class="field"><label for="exp-mode">What to do</label><select id="exp-mode"><option value="add">Add to this category's total for the day</option><option value="replace">Replace this category's total for the day (to correct a mistake)</option></select></div>
-        <div class="field full"><label for="exp-note">What was it for</label><input id="exp-note" placeholder="Diesel, toll, puncture repair…"></div>
+        <div class="field full"><label for="exp-note">What was it for</label><input id="exp-note" placeholder="Litres and rate, toll, puncture repair…"></div>
         <div class="btns full"><button class="btn" type="submit" id="exp-save">Save expense</button></div>
       </form>
     </div>`,
