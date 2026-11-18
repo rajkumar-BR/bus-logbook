@@ -647,3 +647,33 @@ test('yearly spend on the fleet and bus pages includes expenses, matching the da
   const daily = await service.getDailyReport('2026-10-01', '2026-10-23');
   assert.equal(daily.summary.expenses, 5800);
 });
+
+test('several lines of one category, or several bills on one day, are one visit and not a repeat', async () => {
+  const storage = memoryStorage({ Buses: [{ bus_no: '04', active: true }] });
+  const service = createService(storage, { today: () => '2026-11-18', user: 'test' });
+  const bill = { bus_no: '04', kind: 'Repair', date_in: '2026-10-02', date_out: '2026-10-02' };
+  const five = [100, 200, 270, 15, 120].map((amount) => ({ category: 'Under Chase', amount }));
+  await service.saveEntry({ ...bill, total_cost: 705, lines: five });
+  await service.saveEntry({ ...bill, total_cost: 850, lines: [{ category: 'Under Chase', amount: 850 }] });
+  const r = await service.checkRepeat({ bus_no: '04', system: 'Under Chase', date_in: '2026-10-02', kind: 'Repair' });
+  assert.equal(r.isRepeat, false);
+  const again = await service.saveEntry({ ...bill, total_cost: 300, lines: [{ category: 'Under Chase', amount: 300 }] });
+  assert.ok(again.entry_id);
+  const row = (await service.getRepeats()).matrix.find((x) => x.bus_no === '04');
+  assert.equal(row.counts[row.counts.length ? (await service.getRepeats()).systems.indexOf('Under Chase') : 0], 3);
+  // two earlier days is a genuine repeat
+  await service.saveEntry({ ...bill, date_in: '2026-10-09', date_out: '2026-10-09', total_cost: 100, lines: [{ category: 'Under Chase' }] });
+  const later = await service.checkRepeat({ bus_no: '04', system: 'Under Chase', date_in: '2026-10-20', kind: 'Repair' });
+  assert.deepEqual([later.isRepeat, later.count], [true, 2]);
+});
+
+test('a bill history title lists each category once', async () => {
+  const storage = memoryStorage({ Buses: [{ bus_no: '08', active: true }] });
+  const service = createService(storage, { today: () => '2026-11-18', user: 'test' });
+  const bill = { bus_no: '08', kind: 'Repair', date_in: '2026-10-02', date_out: '2026-10-02', total_cost: 600 };
+  const a = await service.saveEntry({ ...bill, lines: [100, 200, 300].map((amount) => ({ category: 'Under Chase', amount })) });
+  const b = await service.saveEntry({ ...bill, lines: [{ category: 'Under Chase', amount: 100 }, { category: 'Electrical Charges', amount: 200 }, { category: 'Under Chase', amount: 300 }] });
+  const history = (await service.getBus('08')).entries;
+  assert.equal(history.find((x) => x.entry_id === a.entry_id).title, 'Under Chase');
+  assert.equal(history.find((x) => x.entry_id === b.entry_id).title, 'Under Chase + Electrical Charges');
+});

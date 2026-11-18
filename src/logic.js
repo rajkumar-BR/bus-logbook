@@ -146,10 +146,12 @@ export function routeAt(assignments, busNo, date) {
 export function repeatCheck(entries, { bus_no, system, date_in, exclude_entry_id }, windowDays = 180) {
   if (!bus_no || !system || !date_in) return { isRepeat: false, count: 0, previous: [] };
   const from = addDays(date_in, -windowDays);
+  // bills on the same day for the same system are one visit, not a repeat: only earlier days count, once each
   const previous = entries
     .filter((e) => e.bus_no === bus_no && e.system === system && isRepair(e)
-      && e.entry_id !== exclude_entry_id && e.date_in >= from && e.date_in <= date_in)
-    .sort(byDate);
+      && e.entry_id !== exclude_entry_id && e.date_in >= from && e.date_in < date_in)
+    .sort(byDate)
+    .filter((e, i, all) => all.findIndex((x) => x.date_in === e.date_in) === i);
   return { isRepeat: previous.length >= 2, count: previous.length, windowDays, previous };
 }
 

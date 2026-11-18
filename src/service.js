@@ -29,7 +29,9 @@ export function createService(storage, { readBill = null, today = localToday, us
     const entries = t.Entries.filter((e) => e.entry_id && L.isActive(e)).map((e) => ({ ...e, system: canon(e.system) }));
     // A bill that covers several categories counts once in each for repeat checks; its money is split by line so totals stay the same.
     const linesOf = (id) => t['Bill lines'].filter((l) => l.entry_id === id && l.record_status !== 'Corrected' && l.record_status !== 'Voided');
-    const repairLines = entries.flatMap((e) => { const ls = linesOf(e.entry_id); return ls.length > 1 ? ls.map((l) => ({ ...e, system: canon(l.category), total_cost: Number(l.amount) || 0 })) : [e]; });
+    // lines of the same category on one bill (one per item bought) are one repair of that category
+    const byCategory = (ls) => { const m = new Map(); for (const l of ls) m.set(canon(l.category), (m.get(canon(l.category)) || 0) + (Number(l.amount) || 0)); return [...m]; };
+    const repairLines = entries.flatMap((e) => { const g = byCategory(linesOf(e.entry_id)); return g.length > 1 ? g.map(([system, total_cost]) => ({ ...e, system, total_cost })) : [e]; });
     // A bill line is one of the repair categories: older names are merged (Battery & electrical, Doors & body) and business costs (insurance, tax…) belong in Add an expense.
     const base = [...new Set(lists.systems.map(canon))].filter((x) => !BUSINESS_EXPENSES.includes(x));
     const missing = BILL_CATEGORIES.filter((x) => !base.includes(x) && x !== 'Other');
@@ -76,7 +78,8 @@ export function createService(storage, { readBill = null, today = localToday, us
     if (e.kind === TYRE_RETREAD) return 'Tyre retread';
     if (e.kind === NEW_TYRE) return 'New tyre';
     if (parts.length) return parts.map((p) => p.part_name).slice(0, 3).join(', ');
-    return cats.length > 1 ? cats.join(' + ') : e.system || e.kind;
+    const distinct = [...new Set(cats)];
+    return distinct.length > 1 ? distinct.join(' + ') : distinct[0] || e.system || e.kind;
   }
 
   // One trip is a run that ends at the school; a bus that goes out again after reaching it has another route and so another trip.
@@ -271,7 +274,7 @@ export function createService(storage, { readBill = null, today = localToday, us
       tyreHistory,
       entries,
       voided: d.voided.filter((e) => e.bus_no === busNo).sort(L.byDate).reverse().map((e) => ({
-        entry_id: e.entry_id, kind: e.kind, title: (d.billLines.filter((l) => l.entry_id === e.entry_id && l.record_status !== 'Corrected' && l.record_status !== 'Voided').map((l) => canon(l.category)).join(' + ')) || e.system || e.kind, date_in: e.date_in, total_cost: e.total_cost,
+        entry_id: e.entry_id, kind: e.kind, title: (d.billLines.filter((l) => l.entry_id === e.entry_id && l.record_status !== 'Corrected' && l.record_status !== 'Voided').map((l) => canon(l.category)).filter((c, i, all) => all.indexOf(c) === i).join(' + ')) || e.system || e.kind, date_in: e.date_in, total_cost: e.total_cost,
         reason: e.voided_reason, removed_by: e.voided_by, removed_at: e.voided_at,
       })),
     };
