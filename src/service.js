@@ -158,6 +158,12 @@ export function createService(storage, { readBill = null, today = localToday, us
     };
   }
 
+  // Everything spent on a bus in a year: bills (repairs, services, tyres) plus what was added as expenses (diesel, salary, insurance…) and typed in daily reports
+  const spendInYear = (d, busNo, year) => {
+    const sum = (rows, dateKey, amountKey) => rows.filter((r) => (!busNo || r.bus_no === busNo) && String(r[dateKey] || '').startsWith(year)).reduce((a, r) => a + (Number(r[amountKey]) || 0), 0);
+    return sum(d.entries, 'date_in', 'total_cost') + sum(d.expenseItems, 'expense_date', 'amount') + sum(d.dailyReports, 'report_date', 'expenses');
+  };
+
   async function getFleet() {
     const d = await load();
     const t = today();
@@ -169,7 +175,7 @@ export function createService(storage, { readBill = null, today = localToday, us
       const be = d.entries.filter((e) => e.bus_no === b.bus_no);
       const svc = L.serviceStatus(b, be, d.settings, t);
       const spent = L.spentSinceLastService(be);
-      const spentYear = be.filter((e) => e.date_in.startsWith(year)).reduce((sum, e) => sum + (Number(e.total_cost) || 0), 0);
+      const spentYear = spendInYear(d, b.bus_no, year);
       const f = L.findings({ bus: b, busEntries: d.repairLines.filter((x) => x.bus_no === b.bus_no), busParts: d.parts.filter((p) => p.bus_no === b.bus_no), allEntries: d.repairLines, allParts: d.parts, activeBusCount: activeBuses(d).length, routes: d.routes, today: t });
       return {
         bus_no: b.bus_no,
@@ -194,7 +200,7 @@ export function createService(storage, { readBill = null, today = localToday, us
         inWorkshop: rows.filter((r) => r.status === STATUS.IN_WORKSHOP).length,
         dueSoon: rows.filter((r) => r.service.state === 'due' || r.service.state === 'overdue').length,
         repairs12: rows.reduce((a, r) => a + r.repairs12, 0),
-        spendYear: d.entries.filter((e) => e.date_in.startsWith(year)).reduce((a, e) => a + (Number(e.total_cost) || 0), 0),
+        spendYear: spendInYear(d, '', year),
         year,
       },
       buses: rows,
@@ -251,7 +257,7 @@ export function createService(storage, { readBill = null, today = localToday, us
         service: { state: svc.state, kmLeft: svc.kmLeft ?? null, daysLeft: svc.daysLeft ?? null },
         spent_since_service: spent.total,
         spent_since_date: spent.since ? spent.since.date_in : null,
-        spent_year: be.filter((e) => e.date_in.startsWith(t.slice(0, 4))).reduce((a, e) => a + (Number(e.total_cost) || 0), 0),
+        spent_year: spendInYear(d, busNo, t.slice(0, 4)),
         repairs12: L.repairsInLastYear(be, t).length,
         fitness_until: docDate('Fitness certificate'),
         insurance_until: docDate('Insurance'),

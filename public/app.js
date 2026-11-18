@@ -156,7 +156,7 @@ async function viewFleet() {
       <div><div class="n" style="color:var(--crit)">${s.inWorkshop}</div><div class="d">In workshop</div></div>
       <div><div class="n" style="color:var(--warn)">${s.dueSoon}</div><div class="d">Service due or overdue</div></div>
       <div><div class="n">${s.repairs12}</div><div class="d">Repairs in last 12 months</div></div>
-      <div><div class="n">${inr(s.spendYear)}</div><div class="d">Spent on maintenance in ${s.year}</div></div>
+      <div><div class="n">${inr(s.spendYear)}</div><div class="d">Total spent in ${s.year}, all expenses</div></div>
     </div>
     <div class="panel">
       <div class="panel-h"><h2>All buses</h2><span class="hint">Service due: every 10,000 km or 90 days unless set per bus</span></div>
@@ -486,7 +486,7 @@ async function viewBus(busNo) {
     ['Odometer', kmText(f.odometer)],
     ['Last service', fullDate(f.last_service)],
     ['Spent since last service', inr(f.spent_since_service)],
-    [`Spent in ${d.today.slice(0, 4)}`, inr(f.spent_year)],
+    [`Total spent in ${d.today.slice(0, 4)}, all expenses`, inr(f.spent_year)],
     ['Repairs · 12 mo', f.repairs12],
     ['Fitness certificate', f.fitness_until ? `Valid till ${fullDate(f.fitness_until)}` : 'Not recorded'],
     ['Insurance', f.insurance_until ? `Valid till ${fullDate(f.insurance_until)}` : 'Not recorded'],

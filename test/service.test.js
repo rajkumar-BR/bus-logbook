@@ -630,3 +630,20 @@ test('driver weekly salary and beta are expense categories', async () => {
   const r = await service.getDailyReport('2026-10-17', '2026-10-17', '01');
   assert.deepEqual(r.summary.by_category, { 'Driver weekly salary': 3500, 'Driver beta': 600 });
 });
+
+test('yearly spend on the fleet and bus pages includes expenses, matching the daily report; service spend stays repairs only', async () => {
+  const storage = memoryStorage({ Buses: [{ bus_no: '01', driver_name: 'D', active: true }, { bus_no: '02', driver_name: 'E', active: true }] });
+  const service = createService(storage, { today: () => '2026-10-23', user: 'test' });
+  await service.saveEntry({ bus_no: '01', kind: 'Repair', date_in: '2026-10-20', date_out: '2026-10-20', problem_reported: 'x', total_cost: 1000, lines: [{ category: 'Brakes' }] });
+  await service.saveExpense({ bus_no: '01', report_date: '2026-10-21', amount: 4000, category: 'Diesel' });
+  await service.saveExpense({ bus_no: '01', report_date: '2026-10-21', amount: 500 });
+  await service.saveExpense({ bus_no: '02', report_date: '2026-10-21', amount: 300, category: 'Tax' });
+  const fleet = await service.getFleet();
+  assert.equal(fleet.buses.find((b) => b.bus_no === '01').spent_year, 5500);
+  assert.equal(fleet.buses.find((b) => b.bus_no === '01').spent_since_service, 1000);
+  assert.equal(fleet.summary.spendYear, 5800);
+  const bus = await service.getBus('01');
+  assert.equal(bus.facts.spent_year, 5500);
+  const daily = await service.getDailyReport('2026-10-01', '2026-10-23');
+  assert.equal(daily.summary.expenses, 5800);
+});
