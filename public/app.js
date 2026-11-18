@@ -78,6 +78,7 @@ async function router() {
   $$('.nav button').forEach((b) => b.toggleAttribute('aria-current', b.dataset.go === NAV_FOR[view]));
   $$('.nav button[aria-current]').forEach((b) => b.setAttribute('aria-current', 'page'));
   const thisNav = ++navId;
+  $('#tip').hidden = true; // the page under the pointer is replaced, so its mouseleave never fires
   main.innerHTML = '<p class="loading">Loading…</p>';
   try {
     await views[view](arg ? decodeURIComponent(arg) : undefined);
