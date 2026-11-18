@@ -566,14 +566,14 @@ test('categorised expenses add to the day, show by category, and can be replaced
   const service = createService(storage, { today: () => '2026-10-23', user: 'test' });
   const day = async () => (await service.getDailyReport('2026-10-20', '2026-10-20', '01'));
   await service.saveExpense({ bus_no: '01', report_date: '2026-10-20', amount: 700 });
-  await service.saveExpense({ bus_no: '01', report_date: '2026-10-20', amount: 3000, category: 'Insurance' });
-  await service.saveExpense({ bus_no: '01', report_date: '2026-10-20', amount: 500, category: 'Insurance' });
+  await service.saveExpense({ bus_no: '01', report_date: '2026-10-20', amount: 3000, category: 'Insurance', valid_until: '2027-10-19' });
+  await service.saveExpense({ bus_no: '01', report_date: '2026-10-20', amount: 500, category: 'Insurance', valid_until: '2027-10-19' });
   await service.saveExpense({ bus_no: '01', report_date: '2026-10-20', amount: 200, category: 'Tax' });
   let r = await day();
   assert.equal(r.buses[0].expenses, 4400);
   assert.deepEqual(r.summary.by_category, { 'Daily running': 700, Insurance: 3500, Tax: 200 });
   assert.equal(r.buses[0].net_collection, -4400);
-  await service.saveExpense({ bus_no: '01', report_date: '2026-10-20', amount: 3200, category: 'Insurance', mode: 'replace' });
+  await service.saveExpense({ bus_no: '01', report_date: '2026-10-20', amount: 3200, category: 'Insurance', valid_until: '2027-10-19', mode: 'replace' });
   r = await day();
   assert.deepEqual(r.summary.by_category, { 'Daily running': 700, Insurance: 3200, Tax: 200 });
   await assert.rejects(service.saveExpense({ bus_no: '01', report_date: '2026-10-20', amount: 1, category: 'Lunch' }), /category/);
@@ -597,7 +597,7 @@ test('a bill can split its total over several categories, which are reported by 
   const saved = await service.saveEntry({ ...bill, lines: [{ category: 'Electrical Charges', amount: 2000, description: 'Fog lamp, wiring' }, { category: 'Body Work', amount: 1000, description: 'Mirror' }] });
   await service.saveEntry({ ...bill, total_cost: 700, date_in: '2026-10-20', lines: [{ category: 'Brakes', description: 'Pads' }] });
   await assert.rejects(service.saveExpense({ bus_no: '01', report_date: '2026-10-20', amount: 500, category: 'Body Work' }), /category/);
-  await service.saveExpense({ bus_no: '01', report_date: '2026-10-20', amount: 1200, category: 'Insurance' });
+  await service.saveExpense({ bus_no: '01', report_date: '2026-10-20', amount: 1200, category: 'Insurance', valid_until: '2027-10-19' });
   const r = await service.getDailyReport('2026-10-20', '2026-10-20', '01');
   assert.deepEqual(r.summary.by_category, { 'Body Work': 1000, 'Electrical Charges': 2000, Brakes: 700, Insurance: 1200 });
   assert.equal(r.summary.expenses, 4900);
@@ -676,4 +676,34 @@ test('a bill history title lists each category once', async () => {
   const history = (await service.getBus('08')).entries;
   assert.equal(history.find((x) => x.entry_id === a.entry_id).title, 'Under Chase');
   assert.equal(history.find((x) => x.entry_id === b.entry_id).title, 'Under Chase + Electrical Charges');
+});
+
+test('a bus document can be added and removed, and an insurance, F.C or road tax expense sets the new valid-until date', async () => {
+  const storage = memoryStorage({ Buses: [{ bus_no: '01', active: true }] });
+  const service = createService(storage, { today: () => '2026-11-18', user: 'test' });
+  const docs = async () => (await service.getBus('01')).documents;
+  const insurance = async () => (await service.getBus('01')).facts.insurance_until;
+  assert.equal(await insurance(), '');
+  await service.addBusDocument('01', { doc_type: 'Insurance', doc_number: 'POL-1', valid_until: '2026-12-01' });
+  assert.equal(await insurance(), '2026-12-01');
+  assert.deepEqual((await docs()).map((x) => [x.doc_type, x.state]), [['Insurance', 'soon']]);
+  await assert.rejects(service.addBusDocument('01', { doc_type: 'Lunch', valid_until: '2027-01-01' }), /type of document/);
+  await assert.rejects(service.addBusDocument('01', { doc_type: 'Insurance', valid_until: '' }), /valid-until/);
+  // paying the premium needs the new date, and sets it
+  await assert.rejects(service.saveExpense({ bus_no: '01', report_date: '2026-11-18', amount: 30000, category: 'Insurance' }), /valid-until date for the insurance/);
+  await assert.rejects(service.saveExpense({ bus_no: '01', report_date: '2026-11-18', amount: 30000, category: 'Insurance', valid_until: '2026-11-01' }), /after the date/);
+  const r = await service.saveExpense({ bus_no: '01', report_date: '2026-11-18', amount: 30000, category: 'Insurance', valid_until: '2027-11-30', doc_number: 'POL-2' });
+  assert.deepEqual([r.doc_type, r.valid_until], ['Insurance', '2027-11-30']);
+  assert.equal(await insurance(), '2027-11-30');
+  assert.equal((await docs()).length, 2);
+  // F.C is required too; road tax (Tax) is optional
+  await assert.rejects(service.saveExpense({ bus_no: '01', report_date: '2026-11-18', amount: 900, category: 'F.C - expense' }), /fitness certificate/);
+  await service.saveExpense({ bus_no: '01', report_date: '2026-11-18', amount: 5000, category: 'Tax' });
+  assert.equal((await service.getBus('01')).facts.fitness_until, '');
+  await service.saveExpense({ bus_no: '01', report_date: '2026-11-18', amount: 900, category: 'F.C - expense', valid_until: '2027-05-01' });
+  assert.equal((await service.getBus('01')).facts.fitness_until, '2027-05-01');
+  // a wrong entry can be removed
+  await service.removeBusDocument('01', { doc_type: 'Insurance', valid_until: '2027-11-30', doc_number: 'POL-2' });
+  assert.equal(await insurance(), '2026-12-01');
+  await assert.rejects(service.removeBusDocument('01', { doc_type: 'Insurance', valid_until: '2027-11-30', doc_number: 'POL-2' }), /not found/);
 });

@@ -81,7 +81,7 @@ export const TABS = {
   ],
   'Bus documents': [
     ['school_id', 'text'], ['bus_no', 'text'], ['doc_type', 'text'], ['doc_number', 'text'],
-    ['valid_until', 'date'], ['file_link', 'text'],
+    ['valid_until', 'date'], ['file_link', 'text'], ['record_status', 'text'], ['entered_by', 'text'], ['entered_at', 'datetime'],
   ],
   Workshops: [
     ['school_id', 'text'], ['workshop_name', 'text'], ['phone', 'text'], ['address', 'text'],
@@ -111,6 +111,8 @@ export const KINDS = {
 // Categories for "Add an expense" (repair categories such as Body Work or Seat are entered on a bill instead). "Daily running" is the plain per-day total (diesel, toll...) kept in the daily report.
 export const EXPENSE_CATEGORIES = ['Diesel', 'Driver weekly salary', 'Driver beta', 'Insurance', 'F.C - expense', 'Tax', 'Broker expense'];
 export const DAILY_EXPENSE = 'Daily running';
+// Expenses that renew a bus document: paying one sets the document's new valid-until date.
+export const RENEWALS = { Insurance: { doc_type: 'Insurance', required: true }, 'F.C - expense': { doc_type: 'Fitness certificate', required: true }, Tax: { doc_type: 'Road tax', required: false } };
 // Costs that are not a repair on the bus: they go in "Add an expense", never on a bill.
 export const BUSINESS_EXPENSES = ['Insurance', 'F.C - expense', 'Tax', 'Broker expense'];
 // What a bill line can be. Older names are merged into the new ones.

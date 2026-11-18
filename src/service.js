@@ -3,7 +3,7 @@
 
 import os from 'node:os';
 import path from 'node:path';
-import { KINDS, STATUS, DEFAULT_LISTS, EXPENSE_CATEGORIES, DAILY_EXPENSE, BUSINESS_EXPENSES, BILL_CATEGORIES, SYSTEM_ALIASES } from './schema.js';
+import { KINDS, STATUS, DEFAULT_LISTS, EXPENSE_CATEGORIES, DAILY_EXPENSE, RENEWALS, BUSINESS_EXPENSES, BILL_CATEGORIES, SYSTEM_ALIASES } from './schema.js';
 
 const canon = (s) => SYSTEM_ALIASES[s] || s;
 import * as L from './logic.js';
@@ -50,7 +50,7 @@ export function createService(storage, { readBill = null, today = localToday, us
       voided: t.Entries.filter((e) => e.entry_id && e.record_status === 'Voided'),
       parts: t['Parts changed'].filter(L.isActive),
       workshops: t.Workshops.map((w) => w.workshop_name).filter(Boolean),
-      docs: t['Bus documents'],
+      docs: t['Bus documents'].filter((x) => x.bus_no && L.isActive(x)),
       tripSettings: t['Trip settings'],
       lists,
       settings: L.settingsMap(t.Settings),
@@ -155,6 +155,7 @@ export function createService(storage, { readBill = null, today = localToday, us
       ...d.lists,
       workshops: d.workshops,
       expense_categories: [DAILY_EXPENSE, ...EXPENSE_CATEGORIES],
+      expense_renewals: RENEWALS,
       buses: activeBuses(d).map((b) => ({ bus_no: b.bus_no, label: busLabel(d, b), trips: tripsPerDay(d, b.bus_no), plans: tripPlans(d, b.bus_no) })),
       aiEnabled: Boolean(readBill) && String(d.settings.ai_enabled ?? 'TRUE').toUpperCase() !== 'FALSE',
       today: today(),
@@ -253,6 +254,7 @@ export function createService(storage, { readBill = null, today = localToday, us
 
     return {
       today: t,
+      documents: d.docs.filter((x) => x.bus_no === busNo).sort((a, z) => String(z.valid_until).localeCompare(String(a.valid_until))).map((x) => ({ doc_type: x.doc_type, doc_number: x.doc_number || '', valid_until: x.valid_until || '', file_url: storage.fileUrl(x.file_link), state: !x.valid_until ? 'unknown' : x.valid_until < t ? 'expired' : x.valid_until <= L.addDays(t, 30) ? 'soon' : 'valid' })),
       bus: { ...b, status: b.status || STATUS.ON_ROUTE, route: currentRoute(d, busNo), trip_plans: weekdayPlans(d, busNo, today()), saturday_plan: saturdayPlan(d, busNo, today()) },
       facts: {
         odometer: svc.odometer,
@@ -507,6 +509,12 @@ export function createService(storage, { readBill = null, today = localToday, us
     const note = String(input.note || '').trim();
     const category = String(input.category || '').trim() || DAILY_EXPENSE;
     if (category !== DAILY_EXPENSE && !EXPENSE_CATEGORIES.includes(category)) throw new UserError('Choose an expense category from the list.');
+    // a renewal (insurance, F.C, road tax) also sets the document's new valid-until date
+    const renewal = RENEWALS[category] || null;
+    const validUntil = String(input.valid_until || '').trim();
+    if (renewal && renewal.required && !validUntil) throw new UserError(`Enter the new valid-until date for the ${renewal.doc_type.toLowerCase()}.`);
+    if (renewal && validUntil && (!/^\d{4}-\d{2}-\d{2}$/.test(validUntil) || Number.isNaN(Date.parse(`${validUntil}T00:00:00`)))) throw new UserError('Enter the valid-until date as a date.');
+    if (renewal && validUntil && validUntil <= report_date) throw new UserError('The valid-until date must be after the date of the expense.');
     const validDate = /^\d{4}-\d{2}-\d{2}$/.test(report_date) && !Number.isNaN(Date.parse(`${report_date}T00:00:00`));
     if (!validDate || report_date > today()) throw new UserError('Choose a valid date that is not in the future.');
     const d = await load();
@@ -520,10 +528,14 @@ export function createService(storage, { readBill = null, today = localToday, us
         const before = tx.read('Expense items').filter(same).reduce((a, x) => a + (Number(x.amount) || 0), 0);
         if (replace) tx.update('Expense items', same, { record_status: 'Removed' });
         const expense_id = `X-${report_date}-${bus_no}-${String(tx.read('Expense items').length + 1).padStart(4, '0')}`;
+        if (renewal && validUntil) {
+          tx.append('Bus documents', [{ bus_no, doc_type: renewal.doc_type, doc_number: String(input.doc_number || '').trim(), valid_until: validUntil, file_link: '', record_status: 'Active', entered_by: user, entered_at: now }]);
+          tx.append('Change log', [{ timestamp: now, user, action: 'Added', tab: 'Bus documents', record_id: bus_no, field: renewal.doc_type, old_value: '', new_value: `valid until ${validUntil} (renewed by expense)` }]);
+        }
         if (amount > 0) tx.append('Expense items', [{ expense_id, bus_no, expense_date: report_date, category, amount, note, record_status: 'Active', entered_by: user, entered_at: now }]);
         const after = replace ? amount : before + amount;
         tx.append('Change log', [{ timestamp: now, user, action: replace ? 'Changed' : 'Added', tab: 'Expense items', record_id: expense_id, field: category, old_value: String(before), new_value: String(after) }]);
-        return { bus_no, report_date, category, expenses: after, created: true };
+        return { bus_no, report_date, category, expenses: after, created: true, valid_until: renewal && validUntil ? validUntil : '', doc_type: renewal ? renewal.doc_type : '' };
       });
     }
     return storage.transact((tx) => {
@@ -1167,6 +1179,38 @@ export function createService(storage, { readBill = null, today = localToday, us
     });
   }
 
+  async function addBusDocument(busNo, input, file = null) {
+    const d = await load();
+    if (!d.buses.some((b) => b.bus_no === busNo)) throw new UserError(`There is no bus "${busNo}".`, 404);
+    const doc_type = String(input.doc_type || '').trim();
+    const valid_until = String(input.valid_until || '').trim();
+    if (!d.lists.doc_types.includes(doc_type)) throw new UserError('Choose the type of document.');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(valid_until) || Number.isNaN(Date.parse(`${valid_until}T00:00:00`))) throw new UserError('Enter the valid-until date.');
+    const doc_number = String(input.doc_number || '').trim();
+    let file_link = '';
+    if (file) {
+      const ext = path.extname(file.originalname) || (file.mimetype === 'application/pdf' ? '.pdf' : '.jpg');
+      file_link = await storage.saveFile(`Documents/Bus ${busNo}`, [doc_type, valid_until, doc_number].filter(Boolean).join(' ') + ext, file.buffer);
+    }
+    const now = localNow();
+    return storage.transact((tx) => {
+      tx.append('Bus documents', [{ bus_no: busNo, doc_type, doc_number, valid_until, file_link, record_status: 'Active', entered_by: user, entered_at: now }]);
+      tx.append('Change log', [{ timestamp: now, user, action: 'Added', tab: 'Bus documents', record_id: busNo, field: doc_type, old_value: '', new_value: `valid until ${valid_until}${doc_number ? `, no. ${doc_number}` : ''}` }]);
+      return { bus_no: busNo, doc_type, valid_until };
+    });
+  }
+
+  async function removeBusDocument(busNo, input) {
+    const now = localNow();
+    const same = (x) => x.bus_no === busNo && x.doc_type === String(input.doc_type || '') && String(x.valid_until || '') === String(input.valid_until || '') && String(x.doc_number || '') === String(input.doc_number || '') && L.isActive(x);
+    return storage.transact((tx) => {
+      const hit = tx.update('Bus documents', same, { record_status: 'Voided' });
+      if (!hit.length) throw new UserError('That document was not found.', 404);
+      tx.append('Change log', [{ timestamp: now, user, action: 'Removed', tab: 'Bus documents', record_id: busNo, field: String(input.doc_type || ''), old_value: `valid until ${input.valid_until}`, new_value: '' }]);
+      return { removed: hit.length };
+    });
+  }
+
   async function addBus(input) {
     const b = {
       bus_no: String(input.bus_no || '').trim(),
@@ -1359,5 +1403,5 @@ export function createService(storage, { readBill = null, today = localToday, us
     return I.buildTemplate({ kinds: lists.entry_kinds, systems: lists.systems });
   }
 
-  return { getLists, getFleet, getBus, getEntry, getRepeats, getDailyReport, saveDailyReport, saveExpense, setTripTimes, updateTrip, getTyres, addTyres, moveTyres, returnRetread, updateTyreCosts, getTripPlans, checkRepeat, readBillFields, saveEntry, voidEntry, addBus, updateBus, listBuses, getChangeLog, importWorkbook, importTemplate };
+  return { getLists, getFleet, getBus, getEntry, getRepeats, getDailyReport, saveDailyReport, saveExpense, setTripTimes, updateTrip, getTyres, addTyres, moveTyres, returnRetread, updateTyreCosts, getTripPlans, checkRepeat, readBillFields, addBusDocument, removeBusDocument, saveEntry, voidEntry, addBus, updateBus, listBuses, getChangeLog, importWorkbook, importTemplate };
 }

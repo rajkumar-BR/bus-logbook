@@ -330,6 +330,8 @@ function busEntryPanels(lists, busNo) {
         <div class="field"><label for="exp-bus">Bus</label><select id="exp-bus" required disabled><option value="${esc(busNo)}" selected>Bus ${esc(busNo)}</option></select></div>
         <div class="field"><label for="exp-date">Date</label><input id="exp-date" type="date" max="${lists.today}" value="${esc(lists.today)}" required></div>
         <div class="field"><label for="exp-category">Category</label><select id="exp-category">${(lists.expense_categories || ['Daily running']).map((c) => `<option value="${esc(c)}">${esc(c === 'Daily running' ? 'Daily running (toll, other small costs…)' : c)}</option>`).join('')}</select></div>
+        <div class="field" id="exp-renew" hidden><label for="exp-valid">New valid-until date<span class="req" id="exp-valid-req">*</span></label><input id="exp-valid" type="date" min="${lists.today}"><span class="hint" id="exp-renew-hint"></span></div>
+        <div class="field" id="exp-renew-no" hidden><label for="exp-docno">Policy / certificate number</label><input id="exp-docno" autocomplete="off"><span class="hint">Optional</span></div>
         <div class="field"><label for="exp-amount">Amount (₹)</label><input id="exp-amount" type="number" min="0" step="0.01" required></div>
         <div class="btns full"><button class="btn" type="submit" id="exp-save">Save expense</button></div>
       </form>
@@ -364,6 +366,18 @@ function busEntryPanels(lists, busNo) {
 }
 
 function wireBusEntryForms(lists) {
+  // Insurance, F.C and road tax renew a document: ask for its new valid-until date
+  const showRenewal = () => {
+    const r = (lists.expense_renewals || {})[$('#exp-category').value];
+    $('#exp-renew').hidden = !r;
+    $('#exp-renew-no').hidden = !r;
+    if (r) {
+      $('#exp-valid-req').hidden = !r.required;
+      $('#exp-renew-hint').textContent = `Sets the bus's ${r.doc_type.toLowerCase()} valid-until date.${r.required ? '' : ' Leave blank if this is not a renewal.'}`;
+    } else { $('#exp-valid').value = ''; $('#exp-docno').value = ''; }
+  };
+  $('#exp-category').addEventListener('change', showRenewal);
+  showRenewal();
   $('#expense-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const error = $('#expense-error');
@@ -372,8 +386,8 @@ function wireBusEntryForms(lists) {
     button.disabled = true;
     const date = $('#exp-date').value;
     try {
-      const saved = await postJSON('/api/reports/expense', { bus_no: $('#exp-bus').value, report_date: date, category: $('#exp-category').value, amount: $('#exp-amount').value, mode: 'add' });
-      toast(`Bus ${saved.bus_no}: ${saved.category && saved.category !== 'Daily running' ? saved.category : 'daily running expenses'} for ${date} are now ${inr(saved.expenses)}.`);
+      const saved = await postJSON('/api/reports/expense', { bus_no: $('#exp-bus').value, report_date: date, category: $('#exp-category').value, valid_until: $('#exp-valid').value, doc_number: $('#exp-docno').value, amount: $('#exp-amount').value, mode: 'add' });
+      toast(`Bus ${saved.bus_no}: ${saved.category && saved.category !== 'Daily running' ? saved.category : 'daily running expenses'} for ${date} are now ${inr(saved.expenses)}.${saved.valid_until ? ` ${saved.doc_type} is now valid until ${fullDate(saved.valid_until)}.` : ''}`);
       const target = `#daily/${encodeURIComponent(`${date}~${date}!${$('#exp-bus').value}`)}`;
       if (location.hash === target) router(); else location.hash = target;
     } catch (err) {
@@ -1264,7 +1278,7 @@ function ttCard(p, title, sat) {
 }
 
 async function viewEditBus(busNo) {
-  const { bus: b } = await api(`/api/buses/${encodeURIComponent(busNo)}`);
+  const [{ bus: b, documents: docs }, lists] = await Promise.all([api(`/api/buses/${encodeURIComponent(busNo)}`), getLists(true)]);
   main.innerHTML = `
     <div class="topbar"><div><h1>Edit Bus ${esc(b.bus_no)}</h1><p class="sub">Change the details. The bus number stays the same, because its history is filed under it.</p></div></div>
     <form class="panel" id="editform" novalidate>
@@ -1283,6 +1297,21 @@ async function viewEditBus(busNo) {
         <div class="btns"><button class="btn" type="submit">Save changes</button><button class="btn ghost" type="button" data-go="#bus/${encodeURIComponent(b.bus_no)}">Cancel</button></div>
       </div>
     </form>
+    <div class="panel" id="bus-docs" style="margin-top:18px">
+      <div class="panel-h"><h2>Documents</h2><span class="hint">Insurance, fitness certificate, permit and so on. The latest valid-until date for each type is the one shown on the bus page. Renewing a document: add a new one.</span></div>
+      <div class="tbl-wrap"><table><thead><tr><th>Document</th><th>Number</th><th>Valid until</th><th></th><th></th></tr></thead>
+      <tbody>${(docs || []).length ? docs.map((x, i) => `<tr><td>${esc(x.doc_type)}</td><td class="mono">${esc(x.doc_number) || '—'}</td><td>${x.valid_until ? fullDate(x.valid_until) : '—'}</td>
+        <td>${x.state === 'expired' ? '<span class="report-status late">Expired</span>' : x.state === 'soon' ? '<span class="report-status missing">Due within 30 days</span>' : x.state === 'valid' ? '<span class="report-status ontime">Valid</span>' : ''}${x.file_url ? ` <a href="${esc(x.file_url)}" target="_blank" rel="noopener">View file</a>` : ''}</td>
+        <td><button class="text-link doc-remove" data-i="${i}" type="button">Remove</button></td></tr>`).join('') : '<tr><td colspan="5" class="hint">No documents recorded yet.</td></tr>'}</tbody></table></div>
+      <form class="busform" id="docform" novalidate style="margin-top:12px">
+        <div class="error" id="doc-error" style="grid-column:1/-1" hidden></div>
+        <div class="field"><label for="doc-type">Document<span class="req">*</span></label><select id="doc-type"><option value="">Choose…</option>${(lists.doc_types || []).map((t) => `<option>${esc(t)}</option>`).join('')}</select></div>
+        <div class="field"><label for="doc-no">Policy / certificate number</label><input id="doc-no" autocomplete="off"></div>
+        <div class="field"><label for="doc-valid">Valid until<span class="req">*</span></label><input id="doc-valid" type="date"></div>
+        <div class="field"><label for="doc-file">Certificate (photo or PDF)</label><input id="doc-file" type="file" accept="image/*,application/pdf"></div>
+        <div class="btns"><button class="btn" type="submit" id="doc-save">Add document</button></div>
+      </form>
+    </div>
     <div class="panel" id="trip-times" style="margin-top:18px">
       <div class="panel-h"><h2>Trip times</h2><span class="hint">Stops, pick-up and drop-off times and planned km for each trip. The morning runs from the first stop to school; the evening is the way back, from school to the first stop</span></div>
       <div class="tt-body">
@@ -1329,6 +1358,38 @@ async function viewEditBus(busNo) {
       button.disabled = false;
     }
   });
+  $('#docform').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const err = $('#doc-error');
+    err.hidden = true;
+    const btn = $('#doc-save');
+    btn.disabled = true;
+    try {
+      const fd = new FormData();
+      fd.append('doc_type', $('#doc-type').value);
+      fd.append('doc_number', $('#doc-no').value);
+      fd.append('valid_until', $('#doc-valid').value);
+      const file = $('#doc-file').files[0];
+      if (file) fd.append('file', file);
+      await api(`/api/buses/${encodeURIComponent(b.bus_no)}/documents`, { method: 'POST', body: fd });
+      toast('Document added.');
+      listsCache = null;
+      router();
+    } catch (e) {
+      err.textContent = e.message;
+      err.hidden = false;
+      btn.disabled = false;
+    }
+  });
+  $$('#bus-docs .doc-remove').forEach((btn) => btn.addEventListener('click', async () => {
+    const x = docs[Number(btn.dataset.i)];
+    if (!confirm(`Remove the ${x.doc_type} valid until ${fullDate(x.valid_until)}? Use this only for a wrong entry. To renew a document, add a new one.`)) return;
+    try {
+      await postJSON(`/api/buses/${encodeURIComponent(b.bus_no)}/documents/remove`, { doc_type: x.doc_type, doc_number: x.doc_number, valid_until: x.valid_until });
+      toast('Document removed.');
+      router();
+    } catch (e) { toast(e.message); }
+  }));
   $('#editform').addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const body = {
