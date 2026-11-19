@@ -65,12 +65,12 @@ async function getLists(force = false) {
 const billTabs = (active) => `<nav class="rtabs" aria-label="Bills">${[['new', 'Bus repair bill'], ['tyrebill', 'Tyre repair bill']].map(([k, l]) => `<a href="#${k}" ${k === active ? 'aria-current="page"' : ''}>${l}</a>`).join('')}</nav>`;
 
 // Daily report, Tyre report and Repeat repairs live under one "Reports" item in the menu; these tabs move between them.
-const reportTabs = (active) => `<nav class="rtabs" aria-label="Reports">${[['daily', 'Daily report'], ['tyrereport', 'Tyre report'], ['repeats', 'Repeat repairs']].map(([k, l]) => `<a href="#${k}" ${k === active ? 'aria-current="page"' : ''}>${l}</a>`).join('')}</nav>`;
+const reportTabs = (active) => `<nav class="rtabs" aria-label="Reports">${[['incomereport', 'Income & expense report'], ['latereport', 'Late & extra km report'], ['tyrereport', 'Tyre report'], ['repeats', 'Repeat repairs']].map(([k, l]) => `<a href="#${k}" ${k === active ? 'aria-current="page"' : ''}>${l}</a>`).join('')}</nav>`;
 
 // ---------- router
 
-const views = { fleet: viewFleet, daily: viewDaily, bus: viewBus, repeats: viewRepeats, new: viewNew, correct: viewCorrect, buses: viewBuses, import: viewImport, editbus: viewEditBus, changelog: viewChangeLog, tyres: viewTyres, tyrereport: viewTyreReport, tyrebill: viewTyreBill };
-const NAV_FOR = { fleet: '#fleet', daily: '#daily', bus: '#fleet', repeats: '#daily', new: '#new', correct: '#new', buses: '#buses', import: '#import', editbus: '#fleet', changelog: '#changelog', tyres: '#tyres', tyrereport: '#daily', tyrebill: '#new' };
+const views = { fleet: viewFleet, incomereport: viewIncomeReport, latereport: viewLateReport, bus: viewBus, repeats: viewRepeats, new: viewNew, correct: viewCorrect, buses: viewBuses, import: viewImport, editbus: viewEditBus, changelog: viewChangeLog, tyres: viewTyres, tyrereport: viewTyreReport, tyrebill: viewTyreBill };
+const NAV_FOR = { fleet: '#fleet', incomereport: '#incomereport', latereport: '#incomereport', bus: '#fleet', repeats: '#incomereport', new: '#new', correct: '#new', buses: '#buses', import: '#import', editbus: '#fleet', changelog: '#changelog', tyres: '#tyres', tyrereport: '#incomereport', tyrebill: '#new' };
 
 async function router() {
   const [name, arg] = location.hash.slice(1).split('/');
@@ -179,9 +179,51 @@ async function viewFleet() {
   $$('tbody tr[data-go]', main).forEach((tr) => tr.addEventListener('keydown', (e) => { if (e.key === 'Enter') location.hash = tr.dataset.go; }));
 }
 
-// ---------- Daily trip report
+// ---------- Income & expense report
 
-async function viewDaily(range = '') {
+async function viewIncomeReport(range = '') {
+  const todayDate = new Date().toLocaleDateString('en-CA');
+  const [rangePart = '', busPart = ''] = range ? range.split('!') : [];
+  const [fromDate = todayDate, toDate = todayDate] = rangePart ? rangePart.split('~') : [];
+  const selectedBus = busPart;
+  const [report, lists] = await Promise.all([
+    api(`/api/reports/daily?start_date=${encodeURIComponent(fromDate)}&end_date=${encodeURIComponent(toDate)}&bus_no=${encodeURIComponent(selectedBus)}`),
+    getLists(true),
+  ]);
+  const cats = Object.entries(report.summary.by_category || {}).sort((x, y) => y[1] - x[1]).map(([k]) => k);
+  main.innerHTML = `
+    ${reportTabs('incomereport')}<div class="topbar"><div><h1>Income &amp; expense report</h1><p class="sub">One row per bus per calendar day · inclusive date range, up to 366 days · to record a bus day or add an expense, open the bus</p></div></div>
+    <form class="report-filter" id="incomereport-filter"><div class="fgroup"><label for="report-bus">Bus</label><select id="report-bus"><option value="">All buses</option>${lists.buses.map((bus) => `<option value="${esc(bus.bus_no)}" ${bus.bus_no === selectedBus ? 'selected' : ''}>${esc(bus.label)}</option>`).join('')}</select></div><div class="fgroup"><label for="report-from">From</label><input id="report-from" type="date" max="${lists.today}" value="${esc(report.from)}" required></div><div class="fgroup"><label for="report-to">To</label><input id="report-to" type="date" max="${lists.today}" value="${esc(report.to)}" required></div><button class="btn" type="submit">View report</button></form>
+    <div class="strip">
+      <div><div class="n">${inr(report.summary.income_collected)}</div><div class="d">Income collected</div></div>
+      <div><div class="n">${inr(report.summary.expenses)}</div><div class="d">Expenses, bills included</div></div>
+      <div><div class="n" style="color:${report.summary.net_collection < 0 ? 'var(--crit)' : 'inherit'}">${inr(report.summary.net_collection)}</div><div class="d">Net (income − expenses)</div></div>
+    </div>
+    ${Object.keys(report.summary.by_category || {}).length ? `<div class="panel report-panel"><div class="panel-h"><h2>Expenses by category</h2><span class="hint">For the buses and dates chosen above</span></div><div class="tbl-wrap"><table><thead><tr><th>Category</th><th>Amount</th></tr></thead><tbody>${Object.entries(report.summary.by_category).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="mono">${inr(v)}</td></tr>`).join('')}<tr><td><b>Total</b></td><td class="mono"><b>${inr(report.summary.expenses)}</b></td></tr></tbody></table></div></div>` : ''}
+    <div class="panel report-panel">
+      <div class="panel-h"><h2>${selectedBus ? `Bus ${esc(selectedBus)} income &amp; expenses` : 'Income &amp; expenses by bus'} · ${fullDate(report.from)} to ${fullDate(report.to)}</h2><span class="hint">Net = income collected − expenses · Sundays are not listed</span></div>
+      <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Bus / driver</th><th>Income</th>${cats.map((k) => `<th>${esc(k)}</th>`).join('')}<th>Total expenses</th><th>Net</th></tr></thead>
+      <tbody>${report.buses.map((bus) => `<tr>
+        <td>${fullDate(bus.report_date)}</td><td><button class="text-link" data-go="#bus/${encodeURIComponent(bus.bus_no)}">Bus ${esc(bus.bus_no)}</button><div class="hint">${esc(bus.driver_name || 'Driver not recorded')}</div></td>
+        <td class="mono">${inr(bus.income_collected)}</td>${cats.map((k) => `<td class="mono">${bus.category_expenses?.[k] ? inr(bus.category_expenses[k]) : '—'}</td>`).join('')}<td class="mono">${inr(bus.expenses)}</td><td class="mono">${inr(bus.net_collection)}</td>
+      </tr>`).join('') || `<tr><td colspan="${5 + cats.length}" class="hint">Nothing to show for this date range.</td></tr>`}</tbody></table></div>
+    </div>`;
+
+  $('#incomereport-filter').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const start = $('#report-from').value;
+    const end = $('#report-to').value;
+    if (!start || !end || start > end) {
+      toast('Choose a valid range: From must be on or before To.');
+      return;
+    }
+    location.hash = `#incomereport/${encodeURIComponent(`${start}~${end}!${$('#report-bus').value}`)}`;
+  });
+}
+
+// ---------- Late & extra km report
+
+async function viewLateReport(range = '') {
   const todayDate = new Date().toLocaleDateString('en-CA');
   const [rangePart = '', busPart = '', statusPart = '', latePart = '', extraPart = ''] = range ? range.split('!') : [];
   const [fromDate = todayDate, toDate = todayDate] = rangePart ? rangePart.split('~') : [];
@@ -191,23 +233,19 @@ async function viewDaily(range = '') {
     getLists(true),
   ]);
   main.innerHTML = `
-    ${reportTabs('daily')}<div class="topbar"><div><h1>Daily bus reports</h1><p class="sub">One row per bus per calendar day · inclusive date range, up to 366 days · to record a bus day or add an expense, open the bus</p></div></div>
-    <form class="report-filter" id="daily-filter"><div class="fgroup"><label for="report-bus">Bus</label><select id="report-bus"><option value="">All buses</option>${lists.buses.map((bus) => `<option value="${esc(bus.bus_no)}" ${bus.bus_no === selectedBus ? 'selected' : ''}>${esc(bus.label)}</option>`).join('')}</select></div><div class="fgroup"><label for="report-from">From</label><input id="report-from" type="date" max="${lists.today}" value="${esc(report.from)}" required></div><div class="fgroup"><label for="report-to">To</label><input id="report-to" type="date" max="${lists.today}" value="${esc(report.to)}" required></div><div class="fgroup"><label for="report-status">Report status</label><select id="report-status">${[['', 'All'], ['On time', 'On time'], ['Late', 'Late'], ['Not reported', 'Not reported']].map(([v, l]) => `<option value="${v}" ${v === statusPart ? 'selected' : ''}>${l}</option>`).join('')}</select></div><div class="fgroup"><label for="report-late">Morning late trips</label><select id="report-late">${[['', 'All'], ['with', 'With late morning trips'], ['none', 'No late morning trips']].map(([v, l]) => `<option value="${v}" ${v === latePart ? 'selected' : ''}>${l}</option>`).join('')}</select></div><div class="fgroup"><label for="report-extra">Extra km</label><select id="report-extra">${[['', 'All'], ['over', 'Over plan'], ['within', 'Within plan']].map(([v, l]) => `<option value="${v}" ${v === extraPart ? 'selected' : ''}>${l}</option>`).join('')}</select></div><button class="btn" type="submit">View report</button></form>
+    ${reportTabs('latereport')}<div class="topbar"><div><h1>Late &amp; extra km report</h1><p class="sub">Late trips and extra km over plan · one row per bus per calendar day · inclusive date range, up to 366 days · to record a bus day, open the bus</p></div></div>
+    <form class="report-filter" id="latereport-filter"><div class="fgroup"><label for="report-bus">Bus</label><select id="report-bus"><option value="">All buses</option>${lists.buses.map((bus) => `<option value="${esc(bus.bus_no)}" ${bus.bus_no === selectedBus ? 'selected' : ''}>${esc(bus.label)}</option>`).join('')}</select></div><div class="fgroup"><label for="report-from">From</label><input id="report-from" type="date" max="${lists.today}" value="${esc(report.from)}" required></div><div class="fgroup"><label for="report-to">To</label><input id="report-to" type="date" max="${lists.today}" value="${esc(report.to)}" required></div><div class="fgroup"><label for="report-status">Report status</label><select id="report-status">${[['', 'All'], ['On time', 'On time'], ['Late', 'Late'], ['Not reported', 'Not reported']].map(([v, l]) => `<option value="${v}" ${v === statusPart ? 'selected' : ''}>${l}</option>`).join('')}</select></div><div class="fgroup"><label for="report-late">Morning late trips</label><select id="report-late">${[['', 'All'], ['with', 'With late morning trips'], ['none', 'No late morning trips']].map(([v, l]) => `<option value="${v}" ${v === latePart ? 'selected' : ''}>${l}</option>`).join('')}</select></div><div class="fgroup"><label for="report-extra">Extra km</label><select id="report-extra">${[['', 'All'], ['over', 'Over plan'], ['within', 'Within plan']].map(([v, l]) => `<option value="${v}" ${v === extraPart ? 'selected' : ''}>${l}</option>`).join('')}</select></div><button class="btn" type="submit">View report</button></form>
     <div class="strip">
       <div><div class="n">${report.summary.reported_bus_days}/${report.summary.total_bus_days}</div><div class="d">Bus-days reported</div></div>
       <div><div class="n" style="color:var(--crit)">${report.summary.late_buses}</div><div class="d">Buses late in the morning</div></div>
       <div><div class="n">${kmText(report.summary.extra_km)}</div><div class="d">Extra km over plan</div></div>
-      <div><div class="n">${inr(report.summary.income_collected)}</div><div class="d">Income collected</div></div>
-      <div><div class="n">${inr(report.summary.expenses)}</div><div class="d">Expenses, bills included</div></div>
     </div>
-    ${Object.keys(report.summary.by_category || {}).length ? `<div class="panel report-panel"><div class="panel-h"><h2>Expenses by category</h2><span class="hint">For the buses and dates chosen above</span></div><div class="tbl-wrap"><table><thead><tr><th>Category</th><th>Amount</th></tr></thead><tbody>${Object.entries(report.summary.by_category).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="mono">${inr(v)}</td></tr>`).join('')}<tr><td><b>Total</b></td><td class="mono"><b>${inr(report.summary.expenses)}</b></td></tr></tbody></table></div></div>` : ''}
     <div class="panel report-panel">
-      <div class="panel-h"><h2>${selectedBus ? `Bus ${esc(selectedBus)} daily totals` : 'Daily totals by bus'} · ${fullDate(report.from)} to ${fullDate(report.to)}</h2><span class="hint">Net = income collected − expenses · missing reports include holidays; Sundays are not listed</span></div>
-      <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Bus / driver</th><th>Report status</th><th>Income</th><th>Expenses</th><th>Net</th><th>Trips logged</th><th>Morning late trips</th><th>Extra km</th></tr></thead>
+      <div class="panel-h"><h2>${selectedBus ? `Bus ${esc(selectedBus)} daily totals` : 'Daily totals by bus'} · ${fullDate(report.from)} to ${fullDate(report.to)}</h2><span class="hint">Missing reports include holidays; Sundays are not listed</span></div>
+      <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Bus / driver</th><th>Report status</th><th>Trips logged</th><th>Morning late trips</th><th>Extra km</th></tr></thead>
       <tbody>${report.buses.map((bus) => `<tr>
         <td>${fullDate(bus.report_date)}</td><td><button class="text-link" data-go="#bus/${encodeURIComponent(bus.bus_no)}">Bus ${esc(bus.bus_no)}</button><div class="hint">${esc(bus.driver_name || 'Driver not recorded')}</div></td>
         <td><span class="report-status ${bus.status === 'On time' ? 'ontime' : bus.status === 'Late' ? 'late' : 'missing'}">${esc(bus.status)}</span></td>
-        <td class="mono">${inr(bus.income_collected)}</td><td class="mono">${inr(bus.expenses)}${Object.entries(bus.category_expenses || {}).map(([k, v]) => `<div class="hint">${esc(k)} ${inr(v)}</div>`).join('')}</td><td class="mono">${inr(bus.net_collection)}</td>
         <td>${bus.trip_count}/${bus.trips_expected}</td><td>${bus.late_trips}</td><td class="mono">${kmText(bus.extra_km)}</td>
       </tr>`).join('')}</tbody></table></div>
     </div>
@@ -226,7 +264,7 @@ async function viewDaily(range = '') {
       </tbody></table></div>
     </div>`;
 
-  $('#daily-filter').addEventListener('submit', (event) => {
+  $('#latereport-filter').addEventListener('submit', (event) => {
     event.preventDefault();
     const bus = $('#report-bus').value;
     const start = $('#report-from').value;
@@ -235,7 +273,7 @@ async function viewDaily(range = '') {
       toast('Choose a valid range: From must be on or before To.');
       return;
     }
-    location.hash = `#daily/${encodeURIComponent(`${start}~${end}!${bus}!${$('#report-status').value}!${$('#report-late').value}!${$('#report-extra').value}`)}`;
+    location.hash = `#latereport/${encodeURIComponent(`${start}~${end}!${bus}!${$('#report-status').value}!${$('#report-late').value}!${$('#report-extra').value}`)}`;
   });
   document.querySelectorAll('.trip-edit').forEach((btn) => btn.addEventListener('click', () => {
     const bus = report.buses.find((b) => b.trips.some((t) => t.trip_id === btn.dataset.trip));
@@ -388,7 +426,7 @@ function wireBusEntryForms(lists) {
     try {
       const saved = await postJSON('/api/reports/expense', { bus_no: $('#exp-bus').value, report_date: date, category: $('#exp-category').value, valid_until: $('#exp-valid').value, doc_number: $('#exp-docno').value, amount: $('#exp-amount').value, mode: 'add' });
       toast(`Bus ${saved.bus_no}: ${saved.category && saved.category !== 'Daily running' ? saved.category : 'daily running expenses'} for ${date} are now ${inr(saved.expenses)}.${saved.valid_until ? ` ${saved.doc_type} is now valid until ${fullDate(saved.valid_until)}.` : ''}`);
-      const target = `#daily/${encodeURIComponent(`${date}~${date}!${$('#exp-bus').value}`)}`;
+      const target = `#incomereport/${encodeURIComponent(`${date}~${date}!${$('#exp-bus').value}`)}`;
       if (location.hash === target) router(); else location.hash = target;
     } catch (err) {
       error.textContent = err.message;
@@ -481,7 +519,7 @@ function wireBusEntryForms(lists) {
     try {
       const saved = await api('/api/reports/daily', { method: 'POST', body: data });
       toast(`Saved daily report for Bus ${saved.bus_no}.`);
-      location.hash = `#daily/${encodeURIComponent(`${report.report_date}~${report.report_date}!${report.bus_no}`)}`;
+      location.hash = `#latereport/${encodeURIComponent(`${report.report_date}~${report.report_date}!${report.bus_no}`)}`;
     } catch (err) {
       error.textContent = err.message;
       error.hidden = false;
