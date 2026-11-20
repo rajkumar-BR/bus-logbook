@@ -407,6 +407,39 @@ export function createService(storage, { readBill = null, today = localToday, us
     };
   }
 
+  // Expenses per bus per month of a year, split by category: bills (by their lines), added expenses and the plain daily running total.
+  async function getMonthlyExpenses(yearInput = '') {
+    const d = await load();
+    const year = /^\d{4}$/.test(String(yearInput)) ? String(yearInput) : today().slice(0, 4);
+    const buses = activeBuses(d);
+    const known = new Set(buses.map((b) => b.bus_no));
+    const years = new Set([today().slice(0, 4)]);
+    const months = Array.from({ length: 12 }, (_, i) => ({ month: `${year}-${String(i + 1).padStart(2, '0')}`, buses: {} }));
+    const yearly = {};
+    const tally = (slot, busNo, category, value) => {
+      const bus = slot[busNo] || (slot[busNo] = { total: 0, by_category: {} });
+      bus.total += value;
+      bus.by_category[category] = (bus.by_category[category] || 0) + value;
+    };
+    const add = (busNo, date, category, amount) => {
+      const value = Number(amount) || 0;
+      const text = String(date || '');
+      if (!known.has(busNo) || !value || !/^\d{4}-\d{2}/.test(text)) return;
+      const y = text.slice(0, 4);
+      years.add(y);
+      tally(yearly[y] || (yearly[y] = {}), busNo, category, value);
+      if (y === year) tally(months[Number(text.slice(5, 7)) - 1].buses, busNo, category, value);
+    };
+    for (const e of d.entries) {
+      const lines = d.billLines.filter((l) => l.entry_id === e.entry_id && l.record_status !== 'Corrected' && l.record_status !== 'Voided');
+      if (lines.length) for (const l of lines) add(e.bus_no, e.date_in, canon(l.category), l.amount);
+      else add(e.bus_no, e.date_in, canon(e.system || e.kind), e.total_cost);
+    }
+    for (const x of d.expenseItems) add(x.bus_no, x.expense_date, x.category, x.amount);
+    for (const r of d.dailyReports) add(r.bus_no, r.report_date, DAILY_EXPENSE, r.expenses);
+    return { year, years: [...years].sort().reverse(), yearly: [...years].sort().map((y) => ({ year: y, buses: yearly[y] || {} })), buses: buses.map((b) => ({ bus_no: b.bus_no, label: busLabel(d, b) })), months };
+  }
+
   async function saveDailyReport(input, photos = []) {
     const report = {
       report_date: String(input.report_date || '').trim(),
@@ -1403,5 +1436,5 @@ export function createService(storage, { readBill = null, today = localToday, us
     return I.buildTemplate({ kinds: lists.entry_kinds, systems: lists.systems });
   }
 
-  return { getLists, getFleet, getBus, getEntry, getRepeats, getDailyReport, saveDailyReport, saveExpense, setTripTimes, updateTrip, getTyres, addTyres, moveTyres, returnRetread, updateTyreCosts, getTripPlans, checkRepeat, readBillFields, addBusDocument, removeBusDocument, saveEntry, voidEntry, addBus, updateBus, listBuses, getChangeLog, importWorkbook, importTemplate };
+  return { getLists, getFleet, getBus, getEntry, getRepeats, getDailyReport, getMonthlyExpenses, saveDailyReport, saveExpense, setTripTimes, updateTrip, getTyres, addTyres, moveTyres, returnRetread, updateTyreCosts, getTripPlans, checkRepeat, readBillFields, addBusDocument, removeBusDocument, saveEntry, voidEntry, addBus, updateBus, listBuses, getChangeLog, importWorkbook, importTemplate };
 }

@@ -229,6 +229,7 @@ app.post('/api/tyres/move', wrap((req) => req.service.moveTyres(req.body || {}))
 app.get('/api/changelog', wrap((req) => req.service.getChangeLog({ action: String(req.query.action || ''), q: String(req.query.q || ''), page: Number(req.query.page) || 1 })));
 app.get('/api/repeats', wrap((req) => req.service.getRepeats()));
 app.get('/api/reports/daily', wrap((req) => req.service.getDailyReport(String(req.query.start_date || ''), String(req.query.end_date || req.query.start_date || ''), String(req.query.bus_no || ''), { status: String(req.query.status || ''), late: String(req.query.late || ''), extra: String(req.query.extra || '') })));
+app.get('/api/reports/monthly-expenses', wrap((req) => req.service.getMonthlyExpenses(String(req.query.year || ''))));
 app.post('/api/reports/daily', tripPhotos, wrap((req) => req.service.saveDailyReport(JSON.parse(req.body.report || '{}'), req.files || [])));
 app.post('/api/reports/expense', wrap((req) => req.service.saveExpense(req.body || {})));
 app.get('/api/import/template', async (req, res, next) => {

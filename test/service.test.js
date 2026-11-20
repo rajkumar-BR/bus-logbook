@@ -707,3 +707,27 @@ test('a bus document can be added and removed, and an insurance, F.C or road tax
   assert.equal(await insurance(), '2026-12-01');
   await assert.rejects(service.removeBusDocument('01', { doc_type: 'Insurance', valid_until: '2027-11-30', doc_number: 'POL-2' }), /not found/);
 });
+
+test('monthly expenses are totalled per bus and month, split by category', async () => {
+  const storage = memoryStorage({
+    Buses: [
+      { bus_no: '01', active: true, status: 'On route' },
+      { bus_no: '02', active: true, status: 'On route' },
+    ],
+    'Daily reports': [{ report_id: 'D1', report_date: '2026-10-05', bus_no: '01', income_collected: 0, expenses: 500 }],
+    'Expense items': [
+      { expense_id: 'X1', expense_date: '2026-10-09', bus_no: '01', category: 'Diesel', amount: 2000 },
+      { expense_id: 'X2', expense_date: '2026-11-02', bus_no: '02', category: 'Diesel', amount: 700 },
+      { expense_id: 'X3', expense_date: '2025-10-02', bus_no: '02', category: 'Diesel', amount: 900 },
+    ],
+  });
+  const service = createService(storage, { today: () => '2026-11-19', user: 'test' });
+  const r = await service.getMonthlyExpenses('2026');
+  assert.equal(r.months.length, 12);
+  assert.equal(r.months[9].buses['01'].total, 2500);
+  assert.equal(r.months[9].buses['01'].by_category.Diesel, 2000);
+  assert.equal(r.months[10].buses['02'].total, 700);
+  assert.equal(r.months[9].buses['02'], undefined);
+  assert.deepEqual(r.years, ['2026', '2025']);
+  assert.deepEqual(r.yearly.map((y) => [y.year, y.buses['01']?.total, y.buses['02']?.total]), [['2025', undefined, 900], ['2026', 2500, 700]]);
+});
