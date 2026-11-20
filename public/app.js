@@ -475,15 +475,14 @@ function busEntryPanels(lists, busNo) {
     </div>`,
     day: `
     <div class="panel report-panel" id="trip-entry">
-      <div class="panel-h"><h2>Record a bus day</h2><span class="hint">Enter daily money totals once and each trip's times. Trip images are optional</span></div>
+      <div class="panel-h"><h2>Record a bus day</h2><span class="hint">Enter the day's income once and each trip's times (expenses go under Add an expense). Trip images are optional</span></div>
       <form class="trip-form" id="trip-form">
         <div class="error full" id="trip-error" hidden></div>
         <div class="field"><label for="trip-bus">Bus</label><select id="trip-bus" required disabled><option value="${esc(busNo)}" selected>Bus ${esc(busNo)}</option></select></div>
         <div class="field"><label for="trip-date">Date</label><input id="trip-date" type="date" max="${lists.today}" value="${esc(lists.today)}" required></div>
         <div class="field"><label for="trip-driver">Driver name</label><input id="trip-driver" required></div>
         <div class="field"><label for="daily-income">Income collected today (₹)</label><input id="daily-income" type="number" min="0" step="0.01" value="0" required></div>
-        <div class="field"><label for="daily-expenses">Expenses today (₹)</label><input id="daily-expenses" type="number" min="0" step="0.01" value="0" required></div>
-        <div class="field full"><label for="daily-notes">Daily notes</label><textarea id="daily-notes" placeholder="Fuel, tolls, delay reasons, or other notes"></textarea></div>
+        <div class="field full"><label for="daily-notes">Daily notes</label><textarea id="daily-notes" placeholder="Delay reasons or other notes"></textarea></div>
         ${Array.from({ length: Math.max(1, ...lists.buses.map((bus) => bus.trips)) }, (_, i) => i + 1).flatMap((number) => [['m', 'Morning'], ['e', 'Evening']].map(([k, session]) => { const id = `trip-${number}-${k}`; return `<fieldset class="trip-leg full" data-trip="${number}" data-session="${session}" style="display:none" disabled><legend>Trip ${number} · ${session}</legend><div class="trip-leg-grid">
           <div class="field"><label for="${id}-origin">From <span class="hint">(from Trip times)</span></label><input id="${id}-origin" placeholder="${session === 'Morning' ? 'First stop' : 'School'}" required></div>
           <div class="field"><label for="${id}-destination">To <span class="hint">(from Trip times)</span></label><input id="${id}-destination" placeholder="${session === 'Morning' ? 'School' : 'Last stop'}" required></div>
@@ -589,7 +588,6 @@ function wireBusEntryForms(lists) {
       report_date: $('#trip-date').value,
       driver_name: $('#trip-driver').value.trim(),
       income_collected: $('#daily-income').value,
-      expenses: $('#daily-expenses').value,
       notes: $('#daily-notes').value.trim(),
       trips: shownTrips().map(({ number, session, id }) => ({
         trip_number: number,

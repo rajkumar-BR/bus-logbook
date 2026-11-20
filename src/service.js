@@ -446,7 +446,7 @@ export function createService(storage, { readBill = null, today = localToday, us
       bus_no: String(input.bus_no || '').trim(),
       driver_name: String(input.driver_name || '').trim(),
       income_collected: Number(input.income_collected),
-      expenses: Number(input.expenses),
+      expenses: Number(input.expenses ?? 0), // no longer typed in the bus-day form: expenses are added as expenses or bills
       notes: String(input.notes || '').trim(),
     };
     const tripInputs = Array.isArray(input.trips) ? input.trips : [];
