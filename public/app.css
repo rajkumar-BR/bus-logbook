@@ -372,3 +372,6 @@ ol.logs{list-style:none;margin:0;padding:0}
 .pie{width:220px;height:220px;flex:none}
 .pie-legend{border-collapse:collapse;min-width:260px}
 .pie-legend td{padding:5px 10px;border-bottom:1px solid var(--line)}
+.barchart .barwrap{cursor:pointer}
+.barchart .val{font-size:11px;fill:var(--ink)}
+.barchart .barwrap:hover .bar{filter:brightness(1.12)}

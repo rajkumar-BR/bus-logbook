@@ -182,7 +182,7 @@ async function viewFleet() {
 // ---------- Charts: monthly expenses per bus, and one bus's expenses by category
 
 const CHART_COLORS = ['#2F6FDE', '#E8743B', '#1F9D6B', '#B5469B', '#D9A400', '#17A2B8', '#8A5A2B', '#6C7A89', '#C0392B', '#5B4FCF'];
-const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const MONTH_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
 function pieSvg(slices) {
   const total = slices.reduce((a, x) => a + x.value, 0);
@@ -202,75 +202,77 @@ function pieSvg(slices) {
 }
 
 async function viewCharts(arg = '') {
-  const [yearPart = '', busPart = '', keyPart = '', viewPart = ''] = arg ? arg.split('!') : [];
-  const data = await api(`/api/reports/monthly-expenses?year=${encodeURIComponent(yearPart)}`);
+  // hash: view ! year ! month ! bus   (view is "monthly" or "yearly"; year and month default to today's)
+  const [viewPart = '', yearPart = '', monthPart = '', busPart = ''] = arg ? arg.split('!') : [];
   const yearlyView = viewPart === 'yearly';
+  const todayDate = new Date().toLocaleDateString('en-CA');
+  const month = /^(0?[1-9]|1[0-2])$/.test(monthPart) ? Number(monthPart) : Number(todayDate.slice(5, 7));
+  const data = await api(`/api/reports/monthly-expenses?year=${encodeURIComponent(yearPart || todayDate.slice(0, 4))}`);
   const busNos = data.buses.map((b) => b.bus_no);
   const colorOf = (busNo) => CHART_COLORS[busNos.indexOf(busNo) % CHART_COLORS.length];
-  // the bars along the bottom: the 12 months of the chosen year, or one group per year
-  const periods = yearlyView
-    ? data.yearly.map((y) => ({ key: y.year, label: y.year, buses: y.buses }))
-    : data.months.map((m, i) => ({ key: String(i + 1), label: MONTH_NAMES[i], buses: m.buses }));
   const selBus = busNos.includes(busPart) ? busPart : '';
-  const selKey = periods.some((x) => x.key === keyPart) ? keyPart : '';
-  const go = (bus = '', key = '', view = yearlyView ? 'yearly' : '') => { location.hash = `#charts/${encodeURIComponent(`${data.year}!${bus}!${key}!${view}`)}`; };
-  const periodName = (x) => (yearlyView ? x.label : `${x.label} ${data.year}`);
+  const periodBuses = yearlyView ? (data.yearly.find((y) => y.year === data.year)?.buses || {}) : data.months[month - 1].buses;
+  const periodName = yearlyView ? data.year : `${MONTH_FULL[month - 1]} ${data.year}`;
+  const go = (over = {}) => {
+    const v = { view: yearlyView ? 'yearly' : 'monthly', year: data.year, month, bus: '', ...over };
+    location.hash = `#charts/${encodeURIComponent(`${v.view}!${v.year}!${v.month}!${v.bus}`)}`;
+  };
 
-  // bar chart geometry: one group per period, one bar per bus
-  const W = 960, H = 340, L = 64, T = 14, B = 34;
-  const max = Math.max(1, ...periods.flatMap((m) => Object.values(m.buses).map((b) => b.total)));
+  // bar chart: buses along the bottom, one bar each
+  const W = 960, H = 340, L = 64, T = 22, B = 34;
+  const max = Math.max(1, ...busNos.map((n) => periodBuses[n]?.total || 0));
   const step = Math.pow(10, Math.floor(Math.log10(max)));
   const top = Math.ceil(max / step) * step;
   const ticks = [0, 1, 2, 3, 4].map((i) => (top / 4) * i);
   const yOf = (v) => T + (H - T - B) * (1 - v / top);
-  const groupW = (W - L - 8) / Math.max(periods.length, 1);
-  const barW = Math.max(3, Math.min(34, (groupW - 8) / Math.max(1, busNos.length)));
-  const bars = periods.map((m, mi) => data.buses.map((b, bi) => {
-    const v = m.buses[b.bus_no]?.total || 0;
-    if (!v) return '';
-    const x = L + mi * groupW + (groupW - barW * busNos.length) / 2 + bi * barW;
-    const dim = selBus && selBus !== b.bus_no ? 0.28 : 1;
-    const picked = selBus === b.bus_no && selKey === m.key;
-    return `<rect class="bar" data-bus="${esc(b.bus_no)}" data-key="${esc(m.key)}" x="${x.toFixed(1)}" y="${yOf(v).toFixed(1)}" width="${(barW - 1).toFixed(1)}" height="${(H - B - yOf(v)).toFixed(1)}" rx="1.5" fill="${colorOf(b.bus_no)}" opacity="${dim}" ${picked ? 'stroke="var(--ink)" stroke-width="2"' : ''} tabindex="0" role="button" aria-label="Bus ${esc(b.bus_no)}, ${esc(periodName(m))}: ${inr(v)}"><title>Bus ${esc(b.bus_no)} · ${esc(periodName(m))} · ${inr(v)}</title></rect>`;
-  }).join('')).join('');
-  const axis = ticks.map((t) => `<line x1="${L}" x2="${W - 8}" y1="${yOf(t)}" y2="${yOf(t)}" stroke="var(--line)"/><text x="${L - 8}" y="${yOf(t) + 4}" text-anchor="end" class="ax">${t >= 100000 ? `${+(t / 100000).toFixed(2)}L` : t >= 1000 ? `${+(t / 1000).toFixed(1)}k` : t}</text>`).join('')
-    + periods.map((m, i) => `<text x="${L + i * groupW + groupW / 2}" y="${H - 12}" text-anchor="middle" class="ax">${esc(m.label)}</text>`).join('');
+  const groupW = (W - L - 8) / Math.max(busNos.length, 1);
+  const barW = Math.min(56, groupW - 14);
+  const short = (v) => (v >= 100000 ? `${+(v / 100000).toFixed(2)}L` : v >= 1000 ? `${+(v / 1000).toFixed(1)}k` : String(v));
+  const bars = busNos.map((n, i) => {
+    const v = periodBuses[n]?.total || 0;
+    const x = L + i * groupW + (groupW - barW) / 2;
+    const dim = selBus && selBus !== n ? 0.3 : 1;
+    return `<g class="barwrap" data-bus="${esc(n)}">
+      <rect x="${(L + i * groupW).toFixed(1)}" y="${T}" width="${groupW.toFixed(1)}" height="${H - T - B}" fill="transparent"/>
+      ${v ? `<rect class="bar" data-bus="${esc(n)}" x="${x.toFixed(1)}" y="${yOf(v).toFixed(1)}" width="${barW.toFixed(1)}" height="${(H - B - yOf(v)).toFixed(1)}" rx="3" fill="${colorOf(n)}" opacity="${dim}" ${selBus === n ? 'stroke="var(--ink)" stroke-width="2"' : ''} tabindex="0" role="button" aria-label="Bus ${esc(n)}, ${esc(periodName)}: ${inr(v)}"><title>Bus ${esc(n)} · ${esc(periodName)} · ${inr(v)}</title></rect>
+      <text x="${(x + barW / 2).toFixed(1)}" y="${(yOf(v) - 5).toFixed(1)}" text-anchor="middle" class="ax val" opacity="${dim}">${short(v)}</text>` : ''}
+    </g>`;
+  }).join('');
+  const axis = ticks.map((t) => `<line x1="${L}" x2="${W - 8}" y1="${yOf(t)}" y2="${yOf(t)}" stroke="var(--line)"/><text x="${L - 8}" y="${yOf(t) + 4}" text-anchor="end" class="ax">${short(t)}</text>`).join('')
+    + busNos.map((n, i) => `<text x="${L + i * groupW + groupW / 2}" y="${H - 12}" text-anchor="middle" class="ax" ${selBus === n ? 'font-weight="700"' : ''}>Bus ${esc(n)}</text>`).join('');
+  const grand = busNos.reduce((a, n) => a + (periodBuses[n]?.total || 0), 0);
 
-  // pie: the chosen bus, for the chosen period (or the whole year / all years)
-  let pie = '<p class="hint" style="padding:14px">Click a bar to see that bus\'s expenses by category.</p>';
+  // pie: the clicked bus's expenses by category for the chosen month / year
+  let pie = '<p class="hint" style="padding:14px">Click a bus\'s bar to see its expenses by category.</p>';
   if (selBus) {
-    const byCat = {};
-    for (const m of periods) {
-      if (selKey && selKey !== m.key) continue;
-      for (const [k, v] of Object.entries(m.buses[selBus]?.by_category || {})) byCat[k] = (byCat[k] || 0) + v;
-    }
-    const entries = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
+    const entries = Object.entries(periodBuses[selBus]?.by_category || {}).sort((a, b) => b[1] - a[1]);
     const total = entries.reduce((a, [, v]) => a + v, 0);
     const slices = entries.map(([label, value], i) => ({ label, value, color: CHART_COLORS[i % CHART_COLORS.length] }));
-    const when = selKey ? periodName(periods.find((x) => x.key === selKey)) : yearlyView ? 'all years' : `all of ${data.year}`;
-    pie = `<div class="panel-h"><h2>Bus ${esc(selBus)} · expenses by category · ${esc(when)}</h2><span class="hint">${selKey ? `<button class="text-link" id="chart-whole">${yearlyView ? 'Show all years' : 'Show the whole year'}</button> · ` : ''}<button class="text-link" id="chart-clear">Clear</button></span></div>
+    pie = `<div class="panel-h"><h2>Bus ${esc(selBus)} · expenses by category · ${esc(periodName)}</h2><span class="hint"><button class="text-link" id="chart-clear">Clear</button></span></div>
       ${total ? `<div class="pie-wrap">${pieSvg(slices)}<table class="pie-legend"><tbody>${slices.map((x) => `<tr><td><span class="sw" style="background:${x.color}"></span>${esc(x.label)}</td><td class="mono">${inr(x.value)}</td><td class="mono hint">${Math.round((x.value / total) * 100)}%</td></tr>`).join('')}<tr><td><b>Total</b></td><td class="mono"><b>${inr(total)}</b></td><td></td></tr></tbody></table></div>` : '<p class="hint" style="padding:14px">No expenses for this bus in that period.</p>'}`;
   }
 
+  const sel = (id, label, options, current) => `<div class="fgroup"><label for="${id}">${label}</label><select id="${id}">${options.map(([v, l]) => `<option value="${esc(v)}" ${String(v) === String(current) ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></div>`;
   main.innerHTML = `
     <div class="topbar"><div><h1>Charts</h1><p class="sub">Expenses of every bus, bills included · click a bar to see that bus's expenses by category</p></div></div>
-    <form class="report-filter" id="chart-filter"><div class="fgroup"><label for="chart-view">View</label><select id="chart-view"><option value="monthly" ${yearlyView ? '' : 'selected'}>Monthly</option><option value="yearly" ${yearlyView ? 'selected' : ''}>Yearly</option></select></div>${yearlyView ? '' : `<div class="fgroup"><label for="chart-year-sel">Year</label><select id="chart-year-sel">${data.years.map((y) => `<option ${y === data.year ? 'selected' : ''}>${y}</option>`).join('')}</select></div>`}</form>
+    <form class="report-filter" id="chart-filter">
+      ${sel('chart-view', 'View', [['monthly', 'Monthly'], ['yearly', 'Yearly']], yearlyView ? 'yearly' : 'monthly')}
+      ${yearlyView ? '' : sel('chart-month', 'Month', MONTH_FULL.map((n, i) => [i + 1, n]), month)}
+      ${sel('chart-year', 'Year', data.years.map((y) => [y, y]), data.year)}
+    </form>
     <div class="panel report-panel">
-      <div class="panel-h"><h2>${yearlyView ? 'Yearly' : 'Monthly'} expenses by bus${yearlyView ? '' : ` · ${data.year}`}</h2><span class="hint">Click a bus below to see ${yearlyView ? 'all its years' : 'its whole year'}</span></div>
-      <div class="chart-legend">${data.buses.map((b) => `<button type="button" class="chip ${selBus === b.bus_no ? 'on' : ''}" data-legend="${esc(b.bus_no)}"><span class="sw" style="background:${colorOf(b.bus_no)}"></span>Bus ${esc(b.bus_no)}</button>`).join('')}</div>
+      <div class="panel-h"><h2>${yearlyView ? 'Yearly' : 'Monthly'} expenses by bus · ${esc(periodName)}</h2><span class="hint">All buses together: ${inr(grand)}</span></div>
       <div class="chart-scroll"><svg viewBox="0 0 ${W} ${H}" class="barchart" role="group" aria-label="${yearlyView ? 'Yearly' : 'Monthly'} expenses of each bus">${axis}${bars}</svg></div>
     </div>
     <div class="panel report-panel" id="pie-panel">${pie}</div>`;
 
-  $('#chart-view').addEventListener('change', (e) => go('', '', e.target.value === 'yearly' ? 'yearly' : ''));
-  $('#chart-year-sel')?.addEventListener('change', (e) => { location.hash = `#charts/${encodeURIComponent(`${e.target.value}!!!`)}`; });
-  document.querySelectorAll('.bar').forEach((bar) => {
-    const pick = () => go(bar.dataset.bus, bar.dataset.key);
-    bar.addEventListener('click', pick);
-    bar.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
+  $('#chart-view').addEventListener('change', (e) => go({ view: e.target.value }));
+  $('#chart-month')?.addEventListener('change', (e) => go({ month: e.target.value }));
+  $('#chart-year').addEventListener('change', (e) => go({ year: e.target.value }));
+  document.querySelectorAll('.barwrap').forEach((g) => {
+    g.addEventListener('click', () => go({ bus: g.dataset.bus }));
+    g.querySelector('.bar')?.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go({ bus: g.dataset.bus }); } });
   });
-  document.querySelectorAll('[data-legend]').forEach((b) => b.addEventListener('click', () => go(b.dataset.legend, '')));
-  $('#chart-whole')?.addEventListener('click', () => go(selBus, ''));
   $('#chart-clear')?.addEventListener('click', () => go());
 }
 
