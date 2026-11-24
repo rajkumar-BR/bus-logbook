@@ -440,6 +440,32 @@ export function createService(storage, { readBill = null, today = localToday, us
     return { year, years: [...years].sort().reverse(), yearly: [...years].sort().map((y) => ({ year: y, buses: yearly[y] || {} })), buses: buses.map((b) => ({ bus_no: b.bus_no, label: busLabel(d, b) })), months };
   }
 
+  // Every individual expense of a bus (or all buses) between two dates: bill lines, added expenses and the old typed daily total.
+  async function getExpenseDetail(busNo = '', startDate = '', endDate = '') {
+    const valid = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(`${v}T00:00:00`));
+    const from = String(startDate), to = String(endDate || startDate);
+    if (!valid(from) || !valid(to)) throw new UserError('Choose valid start and end dates.');
+    if (from > to) throw new UserError('The start date must be on or before the end date.');
+    const d = await load();
+    const buses = activeBuses(d);
+    const bus = String(busNo || '').trim();
+    if (bus && !buses.some((b) => b.bus_no === bus)) throw new UserError(`Bus ${bus} is not active or does not exist.`, 404);
+    const known = new Set(buses.map((b) => b.bus_no));
+    const inScope = (b, date) => (bus ? b === bus : known.has(b)) && date >= from && date <= to;
+    const items = [];
+    for (const e of d.entries) {
+      if (!inScope(e.bus_no, e.date_in)) continue;
+      const lines = d.billLines.filter((l) => l.entry_id === e.entry_id && l.record_status !== 'Corrected' && l.record_status !== 'Voided');
+      const base = { date: e.date_in, bus_no: e.bus_no, source: 'Bill', workshop: e.workshop || '', bill_no: e.bill_no || '', bill_url: e.bill_link ? storage.fileUrl(e.bill_link) : '', entry_id: e.entry_id };
+      if (lines.length) for (const l of lines) items.push({ ...base, category: canon(l.category), amount: Number(l.amount) || 0, detail: l.description || e.problem_reported || '' });
+      else items.push({ ...base, category: canon(e.system || e.kind), amount: Number(e.total_cost) || 0, detail: e.problem_reported || '' });
+    }
+    for (const x of d.expenseItems) if (inScope(x.bus_no, x.expense_date)) items.push({ date: x.expense_date, bus_no: x.bus_no, source: 'Expense', category: x.category, amount: Number(x.amount) || 0, detail: x.note || '' });
+    for (const r of d.dailyReports) if (inScope(r.bus_no, r.report_date) && Number(r.expenses)) items.push({ date: r.report_date, bus_no: r.bus_no, source: 'Daily report', category: DAILY_EXPENSE, amount: Number(r.expenses) || 0, detail: r.notes || '' });
+    const rows = items.filter((i) => i.amount).sort((a, b) => a.date.localeCompare(b.date) || a.bus_no.localeCompare(b.bus_no));
+    return { bus_no: bus, from, to, items: rows, total: rows.reduce((a, i) => a + i.amount, 0) };
+  }
+
   async function saveDailyReport(input, photos = []) {
     const report = {
       report_date: String(input.report_date || '').trim(),
@@ -1436,5 +1462,5 @@ export function createService(storage, { readBill = null, today = localToday, us
     return I.buildTemplate({ kinds: lists.entry_kinds, systems: lists.systems });
   }
 
-  return { getLists, getFleet, getBus, getEntry, getRepeats, getDailyReport, getMonthlyExpenses, saveDailyReport, saveExpense, setTripTimes, updateTrip, getTyres, addTyres, moveTyres, returnRetread, updateTyreCosts, getTripPlans, checkRepeat, readBillFields, addBusDocument, removeBusDocument, saveEntry, voidEntry, addBus, updateBus, listBuses, getChangeLog, importWorkbook, importTemplate };
+  return { getLists, getFleet, getBus, getEntry, getRepeats, getDailyReport, getMonthlyExpenses, getExpenseDetail, saveDailyReport, saveExpense, setTripTimes, updateTrip, getTyres, addTyres, moveTyres, returnRetread, updateTyreCosts, getTripPlans, checkRepeat, readBillFields, addBusDocument, removeBusDocument, saveEntry, voidEntry, addBus, updateBus, listBuses, getChangeLog, importWorkbook, importTemplate };
 }

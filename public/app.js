@@ -69,8 +69,8 @@ const reportTabs = (active) => `<nav class="rtabs" aria-label="Reports">${[['mon
 
 // ---------- router
 
-const views = { fleet: viewFleet, charts: viewCharts, monthlyyearlyreport: viewMonthlyYearlyReport, incomereport: viewMonthlyYearlyReport, latereport: viewLateReport, bus: viewBus, repeats: viewRepeats, new: viewNew, correct: viewCorrect, buses: viewBuses, import: viewImport, editbus: viewEditBus, changelog: viewChangeLog, tyres: viewTyres, tyrereport: viewTyreReport, tyrebill: viewTyreBill };
-const NAV_FOR = { fleet: '#fleet', charts: '#charts', monthlyyearlyreport: '#monthlyyearlyreport', incomereport: '#monthlyyearlyreport', latereport: '#monthlyyearlyreport', bus: '#fleet', repeats: '#monthlyyearlyreport', new: '#new', correct: '#new', buses: '#buses', import: '#import', editbus: '#fleet', changelog: '#changelog', tyres: '#tyres', tyrereport: '#monthlyyearlyreport', tyrebill: '#new' };
+const views = { fleet: viewFleet, charts: viewCharts, monthlyyearlyreport: viewMonthlyYearlyReport, expensedetail: viewExpenseDetail, incomereport: viewMonthlyYearlyReport, latereport: viewLateReport, bus: viewBus, repeats: viewRepeats, new: viewNew, correct: viewCorrect, buses: viewBuses, import: viewImport, editbus: viewEditBus, changelog: viewChangeLog, tyres: viewTyres, tyrereport: viewTyreReport, tyrebill: viewTyreBill };
+const NAV_FOR = { fleet: '#fleet', charts: '#charts', monthlyyearlyreport: '#monthlyyearlyreport', expensedetail: '#monthlyyearlyreport', incomereport: '#monthlyyearlyreport', latereport: '#monthlyyearlyreport', bus: '#fleet', repeats: '#monthlyyearlyreport', new: '#new', correct: '#new', buses: '#buses', import: '#import', editbus: '#fleet', changelog: '#changelog', tyres: '#tyres', tyrereport: '#monthlyyearlyreport', tyrebill: '#new' };
 
 async function router() {
   const [name, arg] = location.hash.slice(1).split('/');
@@ -276,6 +276,15 @@ async function viewCharts(arg = '') {
   $('#chart-clear')?.addEventListener('click', () => go());
 }
 
+// Running costs and Insurance & compliance are the costs added under "Add an expense"; Repair & maintenance is everything else, i.e. the bill categories.
+const GROUPS = [
+  { key: 'running', name: 'Running costs', cats: ['Daily running', 'Diesel', 'Driver weekly salary', 'Driver beta'] },
+  { key: 'compliance', name: 'Insurance & compliance', cats: ['Insurance', 'F.C - expense', 'Tax', 'Broker expense'] },
+  { key: 'repair', name: 'Repair & maintenance', cats: null },
+];
+const groupOf = (cat) => (GROUPS.find((g) => g.cats?.includes(cat)) || GROUPS[2]).key;
+const groupName = (cat) => GROUPS.find((g) => g.key === groupOf(cat)).name;
+
 // ---------- Monthly / Yearly report: income and expenses per bus for one month or one year
 
 async function viewMonthlyYearlyReport(arg = '') {
@@ -294,13 +303,6 @@ async function viewMonthlyYearlyReport(arg = '') {
   const report = await api(`/api/reports/daily?start_date=${from}&end_date=${to}&bus_no=${encodeURIComponent(selectedBus)}`);
   const periodName = yearly ? String(year) : `${MONTH_FULL[month - 1]} ${year}`;
 
-  // Running costs and Insurance & compliance are the costs added under "Add an expense"; Repair & maintenance is everything else, i.e. the bill categories.
-  const GROUPS = [
-    { key: 'running', name: 'Running costs', cats: ['Daily running', 'Diesel', 'Driver weekly salary', 'Driver beta'] },
-    { key: 'compliance', name: 'Insurance & compliance', cats: ['Insurance', 'F.C - expense', 'Tax', 'Broker expense'] },
-    { key: 'repair', name: 'Repair & maintenance', cats: null },
-  ];
-  const groupOf = (cat) => (GROUPS.find((g) => g.cats?.includes(cat)) || GROUPS[2]).key;
   const split = (cats) => Object.entries(cats).reduce((acc, [k, v]) => { acc[groupOf(k)] += v; return acc; }, { running: 0, compliance: 0, repair: 0 });
   // one row per bus: add up that bus's days
   const byBus = new Map();
@@ -335,13 +337,13 @@ async function viewMonthlyYearlyReport(arg = '') {
       <div><div class="n" style="color:${totals.income - totals.expenses < 0 ? 'var(--crit)' : 'inherit'}">${inr(totals.income - totals.expenses)}</div><div class="d">Net (income − expenses)</div></div>
     </div>
     <div class="panel report-panel">
-      <div class="panel-h"><h2>${selectedBus ? `Bus ${esc(selectedBus)}` : 'Buses'} · ${esc(periodName)}</h2><span class="hint">Running costs = daily running, diesel, salary, beta · Insurance &amp; compliance = insurance, F.C, tax, broker · Repair &amp; maintenance = bills · hover a figure for its split</span></div>
+      <div class="panel-h"><h2>${selectedBus ? `Bus ${esc(selectedBus)}` : 'Buses'} · ${esc(periodName)}</h2><span class="hint">Running costs = daily running, diesel, salary, beta · Insurance &amp; compliance = insurance, F.C, tax, broker · Repair &amp; maintenance = bills · hover a figure for its split · click a row for the actual expenses</span></div>
       <div class="tbl-wrap"><table><thead><tr><th>Bus / driver</th><th>Income</th>${GROUPS.map((g) => `<th>${g.name}</th>`).join('')}<th>Total expenses</th><th>Net</th></tr></thead>
-      <tbody>${rows.map((r) => `<tr>
-        <td><button class="text-link" data-go="#bus/${encodeURIComponent(r.bus_no)}">Bus ${esc(r.bus_no)}</button><div class="hint">${esc(r.driver_name || 'Driver not recorded')}</div></td>
+      <tbody>${rows.map((r) => `<tr class="rowlink" data-bus="${esc(r.bus_no)}" tabindex="0" title="Click for the expense details">
+        <td><b>Bus ${esc(r.bus_no)}</b><div class="hint">${esc(r.driver_name || 'Driver not recorded')}</div></td>
         <td class="mono">${inr(r.income)}</td>${GROUPS.map((g) => `<td class="mono" title="${esc(detail(r.cats, g.key))}">${inr(r[g.key])}</td>`).join('')}<td class="mono">${inr(r.expenses)}</td><td class="mono">${inr(net(r))}</td>
       </tr>`).join('') || '<tr><td colspan="7" class="hint">Nothing to show for this period.</td></tr>'}
-      ${rows.length > 1 ? `<tr><td><b>All buses</b></td><td class="mono"><b>${inr(totals.income)}</b></td>${GROUPS.map((g) => `<td class="mono"><b>${inr(totals[g.key])}</b></td>`).join('')}<td class="mono"><b>${inr(totals.expenses)}</b></td><td class="mono"><b>${inr(totals.income - totals.expenses)}</b></td></tr>` : ''}
+      ${rows.length > 1 ? `<tr class="rowlink" data-bus="" tabindex="0" title="Click for the expense details"><td><b>All buses</b></td><td class="mono"><b>${inr(totals.income)}</b></td>${GROUPS.map((g) => `<td class="mono"><b>${inr(totals[g.key])}</b></td>`).join('')}<td class="mono"><b>${inr(totals.expenses)}</b></td><td class="mono"><b>${inr(totals.income - totals.expenses)}</b></td></tr>` : ''}
       </tbody></table></div>
     </div>
     ${Object.keys(byCategory).length ? `<div class="panel report-panel"><div class="panel-h"><h2>Expenses by category</h2><span class="hint">${esc(periodName)}${selectedBus ? ` · Bus ${esc(selectedBus)}` : ' · all buses'}</span></div><div class="tbl-wrap"><table><thead><tr><th>Category</th><th>Amount</th></tr></thead><tbody>${GROUPS.map((g) => catGroup(g.name, catRows(g.key), totals[g.key])).join('')}<tr><td><b>Total</b></td><td class="mono"><b>${inr(totals.expenses)}</b></td></tr></tbody></table></div></div>` : ''}`;
@@ -354,6 +356,47 @@ async function viewMonthlyYearlyReport(arg = '') {
   $('#my-month')?.addEventListener('change', (e) => go({ month: e.target.value }));
   $('#my-year').addEventListener('change', (e) => go({ year: e.target.value }));
   $('#my-bus').addEventListener('change', (e) => go({ bus: e.target.value }));
+  document.querySelectorAll('.rowlink').forEach((tr) => {
+    const open = () => { location.hash = `#expensedetail/${encodeURIComponent(`${yearly ? 'yearly' : 'monthly'}!${year}!${month}!${tr.dataset.bus}`)}`; };
+    tr.addEventListener('click', open);
+    tr.addEventListener('keydown', (e) => { if (e.key === 'Enter') open(); });
+  });
+}
+
+// ---------- Expense details: every actual expense behind one row of the Monthly / Yearly report
+
+async function viewExpenseDetail(arg = '') {
+  const [viewPart = '', yearPart = '', monthPart = '', busPart = ''] = arg ? arg.split('!') : [];
+  const yearly = viewPart === 'yearly';
+  const todayDate = new Date().toLocaleDateString('en-CA');
+  const year = /^\d{4}$/.test(yearPart) ? Number(yearPart) : Number(todayDate.slice(0, 4));
+  const month = /^(0?[1-9]|1[0-2])$/.test(monthPart) ? Number(monthPart) : Number(todayDate.slice(5, 7));
+  const pad = (n) => String(n).padStart(2, '0');
+  const from = yearly ? `${year}-01-01` : `${year}-${pad(month)}-01`;
+  const to = yearly ? `${year}-12-31` : `${year}-${pad(month)}-${pad(new Date(year, month, 0).getDate())}`;
+  const data = await api(`/api/reports/expense-detail?bus_no=${encodeURIComponent(busPart)}&start_date=${from}&end_date=${to}`);
+  const periodName = yearly ? String(year) : `${MONTH_FULL[month - 1]} ${year}`;
+  const who = data.bus_no ? `Bus ${data.bus_no}` : 'All buses';
+  const totals = Object.fromEntries(GROUPS.map((g) => [g.key, data.items.filter((i) => groupOf(i.category) === g.key).reduce((a, i) => a + i.amount, 0)]));
+  const back = `#monthlyyearlyreport/${encodeURIComponent(`${yearly ? 'yearly' : 'monthly'}!${year}!${month}!${data.bus_no}`)}`;
+  main.innerHTML = `
+    ${reportTabs('monthlyyearlyreport')}<div class="topbar"><div><h1>Expense details · ${esc(who)} · ${esc(periodName)}</h1><p class="sub"><a href="${back}">← Back to the Monthly / Yearly report</a>${data.bus_no ? ` · <a href="#bus/${encodeURIComponent(data.bus_no)}">Open Bus ${esc(data.bus_no)}</a>` : ''}</p></div></div>
+    <div class="strip">
+      ${GROUPS.map((g) => `<div><div class="n">${inr(totals[g.key])}</div><div class="d">${g.name}</div></div>`).join('')}
+      <div><div class="n">${inr(data.total)}</div><div class="d">Total expenses</div></div>
+      <div><div class="n">${data.items.length}</div><div class="d">Expense entries</div></div>
+    </div>
+    <div class="panel report-panel">
+      <div class="panel-h"><h2>Every expense, by date</h2><span class="hint">Bills are listed by their category lines</span></div>
+      <div class="tbl-wrap"><table><thead><tr><th>Date</th>${data.bus_no ? '' : '<th>Bus</th>'}<th>Group</th><th>Category</th><th>Details</th><th>Source</th><th>Amount</th></tr></thead>
+      <tbody>${data.items.map((i) => `<tr>
+        <td>${fullDate(i.date)}</td>${data.bus_no ? '' : `<td>Bus ${esc(i.bus_no)}</td>`}<td>${esc(groupName(i.category))}</td><td>${esc(i.category)}</td>
+        <td>${esc(i.detail || '—')}${i.workshop || i.bill_no ? `<div class="hint">${esc([i.workshop, i.bill_no && `Bill ${i.bill_no}`].filter(Boolean).join(' · '))}</div>` : ''}</td>
+        <td>${esc(i.source)}${i.bill_url ? ` · <a href="${esc(i.bill_url)}" target="_blank" rel="noopener">View bill</a>` : ''}</td><td class="mono">${inr(i.amount)}</td>
+      </tr>`).join('') || `<tr><td colspan="${data.bus_no ? 6 : 7}" class="hint">No expenses in this period.</td></tr>`}
+      ${data.items.length ? `<tr><td colspan="${data.bus_no ? 5 : 6}"><b>Total</b></td><td class="mono"><b>${inr(data.total)}</b></td></tr>` : ''}
+      </tbody></table></div>
+    </div>`;
 }
 
 // ---------- Late & extra km report

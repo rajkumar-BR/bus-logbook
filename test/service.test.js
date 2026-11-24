@@ -731,3 +731,21 @@ test('monthly expenses are totalled per bus and month, split by category', async
   assert.deepEqual(r.years, ['2026', '2025']);
   assert.deepEqual(r.yearly.map((y) => [y.year, y.buses['01']?.total, y.buses['02']?.total]), [['2025', undefined, 900], ['2026', 2500, 700]]);
 });
+
+test('expense detail lists every expense of a bus in a period', async () => {
+  const storage = memoryStorage({
+    Buses: [{ bus_no: '01', active: true, status: 'On route' }, { bus_no: '02', active: true, status: 'On route' }],
+    'Daily reports': [{ report_id: 'D1', report_date: '2026-10-05', bus_no: '01', income_collected: 0, expenses: 500, notes: 'toll' }],
+    'Expense items': [
+      { expense_id: 'X1', expense_date: '2026-10-09', bus_no: '01', category: 'Diesel', amount: 2000, note: 'full tank' },
+      { expense_id: 'X2', expense_date: '2026-10-10', bus_no: '02', category: 'Diesel', amount: 700 },
+      { expense_id: 'X3', expense_date: '2026-11-02', bus_no: '01', category: 'Diesel', amount: 900 },
+    ],
+  });
+  const service = createService(storage, { today: () => '2026-11-19', user: 'test' });
+  const one = await service.getExpenseDetail('01', '2026-10-01', '2026-10-31');
+  assert.deepEqual(one.items.map((i) => [i.date, i.category, i.amount, i.source]), [['2026-10-05', 'Daily running', 500, 'Daily report'], ['2026-10-09', 'Diesel', 2000, 'Expense']]);
+  assert.equal(one.total, 2500);
+  assert.equal((await service.getExpenseDetail('', '2026-10-01', '2026-10-31')).total, 3200);
+  await assert.rejects(service.getExpenseDetail('99', '2026-10-01', '2026-10-31'), /not active or does not exist/);
+});
