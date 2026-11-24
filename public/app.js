@@ -65,12 +65,12 @@ async function getLists(force = false) {
 const billTabs = (active) => `<nav class="rtabs" aria-label="Bills">${[['new', 'Bus repair bill'], ['tyrebill', 'Tyre repair bill']].map(([k, l]) => `<a href="#${k}" ${k === active ? 'aria-current="page"' : ''}>${l}</a>`).join('')}</nav>`;
 
 // Daily report, Tyre report and Repeat repairs live under one "Reports" item in the menu; these tabs move between them.
-const reportTabs = (active) => `<nav class="rtabs" aria-label="Reports">${[['incomereport', 'Income & expense report'], ['latereport', 'Late & extra km report'], ['tyrereport', 'Tyre report'], ['repeats', 'Repeat repairs']].map(([k, l]) => `<a href="#${k}" ${k === active ? 'aria-current="page"' : ''}>${l}</a>`).join('')}</nav>`;
+const reportTabs = (active) => `<nav class="rtabs" aria-label="Reports">${[['monthlyyearlyreport', 'Monthly / Yearly report'], ['latereport', 'Late & extra km report'], ['tyrereport', 'Tyre report'], ['repeats', 'Repeat repairs']].map(([k, l]) => `<a href="#${k}" ${k === active ? 'aria-current="page"' : ''}>${l}</a>`).join('')}</nav>`;
 
 // ---------- router
 
-const views = { fleet: viewFleet, charts: viewCharts, incomereport: viewIncomeReport, latereport: viewLateReport, bus: viewBus, repeats: viewRepeats, new: viewNew, correct: viewCorrect, buses: viewBuses, import: viewImport, editbus: viewEditBus, changelog: viewChangeLog, tyres: viewTyres, tyrereport: viewTyreReport, tyrebill: viewTyreBill };
-const NAV_FOR = { fleet: '#fleet', charts: '#charts', incomereport: '#incomereport', latereport: '#incomereport', bus: '#fleet', repeats: '#incomereport', new: '#new', correct: '#new', buses: '#buses', import: '#import', editbus: '#fleet', changelog: '#changelog', tyres: '#tyres', tyrereport: '#incomereport', tyrebill: '#new' };
+const views = { fleet: viewFleet, charts: viewCharts, monthlyyearlyreport: viewMonthlyYearlyReport, incomereport: viewMonthlyYearlyReport, latereport: viewLateReport, bus: viewBus, repeats: viewRepeats, new: viewNew, correct: viewCorrect, buses: viewBuses, import: viewImport, editbus: viewEditBus, changelog: viewChangeLog, tyres: viewTyres, tyrereport: viewTyreReport, tyrebill: viewTyreBill };
+const NAV_FOR = { fleet: '#fleet', charts: '#charts', monthlyyearlyreport: '#monthlyyearlyreport', incomereport: '#monthlyyearlyreport', latereport: '#monthlyyearlyreport', bus: '#fleet', repeats: '#monthlyyearlyreport', new: '#new', correct: '#new', buses: '#buses', import: '#import', editbus: '#fleet', changelog: '#changelog', tyres: '#tyres', tyrereport: '#monthlyyearlyreport', tyrebill: '#new' };
 
 async function router() {
   const [name, arg] = location.hash.slice(1).split('/');
@@ -276,48 +276,84 @@ async function viewCharts(arg = '') {
   $('#chart-clear')?.addEventListener('click', () => go());
 }
 
-// ---------- Income & expense report
+// ---------- Monthly / Yearly report: income and expenses per bus for one month or one year
 
-async function viewIncomeReport(range = '') {
+async function viewMonthlyYearlyReport(arg = '') {
+  // hash: view ! year ! month ! bus   (view is "monthly" or "yearly"; year and month default to today's)
+  const [viewPart = '', yearPart = '', monthPart = '', busPart = ''] = arg ? arg.split('!') : [];
+  const yearly = viewPart === 'yearly';
   const todayDate = new Date().toLocaleDateString('en-CA');
-  const [rangePart = '', busPart = ''] = range ? range.split('!') : [];
-  const [fromDate = todayDate, toDate = todayDate] = rangePart ? rangePart.split('~') : [];
-  const selectedBus = busPart;
-  const [report, lists] = await Promise.all([
-    api(`/api/reports/daily?start_date=${encodeURIComponent(fromDate)}&end_date=${encodeURIComponent(toDate)}&bus_no=${encodeURIComponent(selectedBus)}`),
-    getLists(true),
-  ]);
-  // Every expense category is a column (even when nothing was spent), then any other category found in the data.
-  const listed = [...(lists.expense_categories || []), ...(lists.systems || [])];
-  const cats = [...new Set([...listed, ...Object.keys(report.summary.by_category || {})])];
-  main.innerHTML = `
-    ${reportTabs('incomereport')}<div class="topbar"><div><h1>Income &amp; expense report</h1><p class="sub">One row per bus per calendar day · inclusive date range, up to 366 days · to record a bus day or add an expense, open the bus</p></div></div>
-    <form class="report-filter" id="incomereport-filter"><div class="fgroup"><label for="report-bus">Bus</label><select id="report-bus"><option value="">All buses</option>${lists.buses.map((bus) => `<option value="${esc(bus.bus_no)}" ${bus.bus_no === selectedBus ? 'selected' : ''}>${esc(bus.label)}</option>`).join('')}</select></div><div class="fgroup"><label for="report-from">From</label><input id="report-from" type="date" max="${lists.today}" value="${esc(report.from)}" required></div><div class="fgroup"><label for="report-to">To</label><input id="report-to" type="date" max="${lists.today}" value="${esc(report.to)}" required></div><button class="btn" type="submit">View report</button></form>
-    <div class="strip">
-      <div><div class="n">${inr(report.summary.income_collected)}</div><div class="d">Income collected</div></div>
-      <div><div class="n">${inr(report.summary.expenses)}</div><div class="d">Expenses, bills included</div></div>
-      <div><div class="n" style="color:${report.summary.net_collection < 0 ? 'var(--crit)' : 'inherit'}">${inr(report.summary.net_collection)}</div><div class="d">Net (income − expenses)</div></div>
-    </div>
-    ${Object.keys(report.summary.by_category || {}).length ? `<div class="panel report-panel"><div class="panel-h"><h2>Expenses by category</h2><span class="hint">For the buses and dates chosen above</span></div><div class="tbl-wrap"><table><thead><tr><th>Category</th><th>Amount</th></tr></thead><tbody>${Object.entries(report.summary.by_category).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="mono">${inr(v)}</td></tr>`).join('')}<tr><td><b>Total</b></td><td class="mono"><b>${inr(report.summary.expenses)}</b></td></tr></tbody></table></div></div>` : ''}
-    <div class="panel report-panel">
-      <div class="panel-h"><h2>${selectedBus ? `Bus ${esc(selectedBus)} income &amp; expenses` : 'Income &amp; expenses by bus'} · ${fullDate(report.from)} to ${fullDate(report.to)}</h2><span class="hint">Net = income collected − expenses · Sundays are not listed</span></div>
-      <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Bus / driver</th><th>Income</th>${cats.map((k) => `<th>${esc(k)}</th>`).join('')}<th>Total expenses</th><th>Net</th></tr></thead>
-      <tbody>${report.buses.map((bus) => `<tr>
-        <td>${fullDate(bus.report_date)}</td><td><button class="text-link" data-go="#bus/${encodeURIComponent(bus.bus_no)}">Bus ${esc(bus.bus_no)}</button><div class="hint">${esc(bus.driver_name || 'Driver not recorded')}</div></td>
-        <td class="mono">${inr(bus.income_collected)}</td>${cats.map((k) => `<td class="mono">${bus.category_expenses?.[k] ? inr(bus.category_expenses[k]) : '—'}</td>`).join('')}<td class="mono">${inr(bus.expenses)}</td><td class="mono">${inr(bus.net_collection)}</td>
-      </tr>`).join('') || `<tr><td colspan="${5 + cats.length}" class="hint">Nothing to show for this date range.</td></tr>`}</tbody></table></div>
-    </div>`;
+  const thisYear = Number(todayDate.slice(0, 4));
+  const year = /^\d{4}$/.test(yearPart) ? Number(yearPart) : thisYear;
+  const month = /^(0?[1-9]|1[0-2])$/.test(monthPart) ? Number(monthPart) : Number(todayDate.slice(5, 7));
+  const pad = (n) => String(n).padStart(2, '0');
+  const from = yearly ? `${year}-01-01` : `${year}-${pad(month)}-01`;
+  const to = yearly ? `${year}-12-31` : `${year}-${pad(month)}-${pad(new Date(year, month, 0).getDate())}`;
+  const lists = await getLists(true);
+  const selectedBus = lists.buses.some((b) => b.bus_no === busPart) ? busPart : '';
+  const report = await api(`/api/reports/daily?start_date=${from}&end_date=${to}&bus_no=${encodeURIComponent(selectedBus)}`);
+  const periodName = yearly ? String(year) : `${MONTH_FULL[month - 1]} ${year}`;
 
-  $('#incomereport-filter').addEventListener('submit', (event) => {
-    event.preventDefault();
-    const start = $('#report-from').value;
-    const end = $('#report-to').value;
-    if (!start || !end || start > end) {
-      toast('Choose a valid range: From must be on or before To.');
-      return;
-    }
-    location.hash = `#incomereport/${encodeURIComponent(`${start}~${end}!${$('#report-bus').value}`)}`;
-  });
+  // Running costs and Insurance & compliance are the costs added under "Add an expense"; Repair & maintenance is everything else, i.e. the bill categories.
+  const GROUPS = [
+    { key: 'running', name: 'Running costs', cats: ['Daily running', 'Diesel', 'Driver weekly salary', 'Driver beta'] },
+    { key: 'compliance', name: 'Insurance & compliance', cats: ['Insurance', 'F.C - expense', 'Tax', 'Broker expense'] },
+    { key: 'repair', name: 'Repair & maintenance', cats: null },
+  ];
+  const groupOf = (cat) => (GROUPS.find((g) => g.cats?.includes(cat)) || GROUPS[2]).key;
+  const split = (cats) => Object.entries(cats).reduce((acc, [k, v]) => { acc[groupOf(k)] += v; return acc; }, { running: 0, compliance: 0, repair: 0 });
+  // one row per bus: add up that bus's days
+  const byBus = new Map();
+  for (const day of report.buses) {
+    const row = byBus.get(day.bus_no) || { bus_no: day.bus_no, driver_name: day.driver_name, income: 0, cats: {} };
+    row.income += day.income_collected;
+    for (const [k, v] of Object.entries(day.category_expenses || {})) row.cats[k] = (row.cats[k] || 0) + v;
+    byBus.set(day.bus_no, row);
+  }
+  const rows = [...byBus.values()].map((r) => ({ ...r, ...split(r.cats), expenses: Object.values(r.cats).reduce((a, b) => a + b, 0) }));
+  const totals = rows.reduce((t, r) => ({ income: t.income + r.income, running: t.running + r.running, compliance: t.compliance + r.compliance, repair: t.repair + r.repair }), { income: 0, running: 0, compliance: 0, repair: 0 });
+  totals.expenses = totals.running + totals.compliance + totals.repair;
+  const byCategory = report.summary.by_category || {};
+  const catRows = (key) => Object.entries(byCategory).filter(([k]) => groupOf(k) === key).sort((a, b) => b[1] - a[1]);
+  const catGroup = (name, items, sum) => `<tr class="grp"><td><b>${name}</b></td><td class="mono"><b>${inr(sum)}</b></td></tr>${items.map(([k, v]) => `<tr><td class="indent">${esc(k)}</td><td class="mono">${inr(v)}</td></tr>`).join('')}`;
+  const detail = (cats, key) => Object.entries(cats).filter(([k]) => groupOf(k) === key).map(([k, v]) => `${k} ${inr(v)}`).join('\n');
+  const net = (r) => r.income - r.expenses;
+  const sel = (id, label, options, current) => `<div class="fgroup"><label for="${id}">${label}</label><select id="${id}">${options.map(([v, l]) => `<option value="${esc(v)}" ${String(v) === String(current) ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></div>`;
+
+  main.innerHTML = `
+    ${reportTabs('monthlyyearlyreport')}<div class="topbar"><div><h1>Monthly / Yearly report</h1><p class="sub">Income and expenses per bus for one month or one year, in three expense groups · to record a bus day or add an expense, open the bus</p></div></div>
+    <form class="report-filter" id="myreport-filter">
+      ${sel('my-view', 'View', [['monthly', 'Monthly'], ['yearly', 'Yearly']], yearly ? 'yearly' : 'monthly')}
+      ${yearly ? '' : sel('my-month', 'Month', MONTH_FULL.map((n, i) => [i + 1, n]), month)}
+      ${sel('my-year', 'Year', Array.from({ length: 6 }, (_, i) => [thisYear - i, thisYear - i]), year)}
+      <div class="fgroup"><label for="my-bus">Bus</label><select id="my-bus"><option value="">All buses</option>${lists.buses.map((bus) => `<option value="${esc(bus.bus_no)}" ${bus.bus_no === selectedBus ? 'selected' : ''}>${esc(bus.label)}</option>`).join('')}</select></div>
+    </form>
+    <div class="strip">
+      <div><div class="n">${inr(totals.income)}</div><div class="d">Income collected</div></div>
+      ${GROUPS.map((g) => `<div><div class="n">${inr(totals[g.key])}</div><div class="d">${g.name}</div></div>`).join('')}
+      <div><div class="n">${inr(totals.expenses)}</div><div class="d">Total expenses</div></div>
+      <div><div class="n" style="color:${totals.income - totals.expenses < 0 ? 'var(--crit)' : 'inherit'}">${inr(totals.income - totals.expenses)}</div><div class="d">Net (income − expenses)</div></div>
+    </div>
+    <div class="panel report-panel">
+      <div class="panel-h"><h2>${selectedBus ? `Bus ${esc(selectedBus)}` : 'Buses'} · ${esc(periodName)}</h2><span class="hint">Running costs = daily running, diesel, salary, beta · Insurance &amp; compliance = insurance, F.C, tax, broker · Repair &amp; maintenance = bills · hover a figure for its split</span></div>
+      <div class="tbl-wrap"><table><thead><tr><th>Bus / driver</th><th>Income</th>${GROUPS.map((g) => `<th>${g.name}</th>`).join('')}<th>Total expenses</th><th>Net</th></tr></thead>
+      <tbody>${rows.map((r) => `<tr>
+        <td><button class="text-link" data-go="#bus/${encodeURIComponent(r.bus_no)}">Bus ${esc(r.bus_no)}</button><div class="hint">${esc(r.driver_name || 'Driver not recorded')}</div></td>
+        <td class="mono">${inr(r.income)}</td>${GROUPS.map((g) => `<td class="mono" title="${esc(detail(r.cats, g.key))}">${inr(r[g.key])}</td>`).join('')}<td class="mono">${inr(r.expenses)}</td><td class="mono">${inr(net(r))}</td>
+      </tr>`).join('') || '<tr><td colspan="7" class="hint">Nothing to show for this period.</td></tr>'}
+      ${rows.length > 1 ? `<tr><td><b>All buses</b></td><td class="mono"><b>${inr(totals.income)}</b></td>${GROUPS.map((g) => `<td class="mono"><b>${inr(totals[g.key])}</b></td>`).join('')}<td class="mono"><b>${inr(totals.expenses)}</b></td><td class="mono"><b>${inr(totals.income - totals.expenses)}</b></td></tr>` : ''}
+      </tbody></table></div>
+    </div>
+    ${Object.keys(byCategory).length ? `<div class="panel report-panel"><div class="panel-h"><h2>Expenses by category</h2><span class="hint">${esc(periodName)}${selectedBus ? ` · Bus ${esc(selectedBus)}` : ' · all buses'}</span></div><div class="tbl-wrap"><table><thead><tr><th>Category</th><th>Amount</th></tr></thead><tbody>${GROUPS.map((g) => catGroup(g.name, catRows(g.key), totals[g.key])).join('')}<tr><td><b>Total</b></td><td class="mono"><b>${inr(totals.expenses)}</b></td></tr></tbody></table></div></div>` : ''}`;
+
+  const go = (over = {}) => {
+    const v = { view: yearly ? 'yearly' : 'monthly', year, month, bus: selectedBus, ...over };
+    location.hash = `#monthlyyearlyreport/${encodeURIComponent(`${v.view}!${v.year}!${v.month}!${v.bus}`)}`;
+  };
+  $('#my-view').addEventListener('change', (e) => go({ view: e.target.value }));
+  $('#my-month')?.addEventListener('change', (e) => go({ month: e.target.value }));
+  $('#my-year').addEventListener('change', (e) => go({ year: e.target.value }));
+  $('#my-bus').addEventListener('change', (e) => go({ bus: e.target.value }));
 }
 
 // ---------- Late & extra km report
@@ -524,7 +560,7 @@ function wireBusEntryForms(lists) {
     try {
       const saved = await postJSON('/api/reports/expense', { bus_no: $('#exp-bus').value, report_date: date, category: $('#exp-category').value, valid_until: $('#exp-valid').value, doc_number: $('#exp-docno').value, amount: $('#exp-amount').value, mode: 'add' });
       toast(`Bus ${saved.bus_no}: ${saved.category && saved.category !== 'Daily running' ? saved.category : 'daily running expenses'} for ${date} are now ${inr(saved.expenses)}.${saved.valid_until ? ` ${saved.doc_type} is now valid until ${fullDate(saved.valid_until)}.` : ''}`);
-      const target = `#incomereport/${encodeURIComponent(`${date}~${date}!${$('#exp-bus').value}`)}`;
+      const target = `#monthlyyearlyreport/${encodeURIComponent(`monthly!${date.slice(0, 4)}!${Number(date.slice(5, 7))}!${$('#exp-bus').value}`)}`;
       if (location.hash === target) router(); else location.hash = target;
     } catch (err) {
       error.textContent = err.message;

@@ -6,7 +6,7 @@ A logbook for school and transport organisations. It records every service, repa
 - **Bus history:** a timeline of every visit with what changed, why, the bill, and spending between services
 - **Repeat repairs:** which buses keep coming back for the same fault, and likely reasons
 - **Enter a bill:** upload the driver's bill, optionally let AI read it, check the details and save
-- **Income & expense report:** income, expenses and net per bus per day
+- **Monthly / Yearly report:** income, expenses (running costs, insurance & compliance, repair & maintenance) and net per bus for a month or a year
 - **Late & extra km report:** trips, late buses and extra km per bus per day
 - **Import:** bring in records from an Excel file you already keep
 - **Change log:** everything that was added, corrected, edited or removed, and by whom

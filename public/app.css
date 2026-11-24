@@ -375,3 +375,5 @@ ol.logs{list-style:none;margin:0;padding:0}
 .barchart .barwrap{cursor:pointer}
 .barchart .val{font-size:11px;fill:var(--ink)}
 .barchart .barwrap:hover .bar{filter:brightness(1.12)}
+.grp td{background:var(--surface-2)}
+.indent{padding-left:28px!important}
